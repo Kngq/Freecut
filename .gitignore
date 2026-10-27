@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-electron/
+*.log
+.DS_Store
+
+# Reference-only CapCut user data copied in for format research — not app code.
+capcutcopy/
