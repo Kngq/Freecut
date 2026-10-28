@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { probeMedia } from './probe'
 import { exportProject } from './export'
 import { FILE_EXTENSION, type Project } from '@shared/types'
@@ -9,6 +9,19 @@ import { FILE_EXTENSION, type Project } from '@shared/types'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+
+/**
+ * The renderer loads from http://localhost:5173 in dev, so <video>/<audio> elements can't
+ * load file:// sources directly — Chromium's media URL safety check rejects the cross-scheme
+ * load. Serving local media through this privileged custom scheme instead (backed by
+ * net.fetch, which handles Range requests for free) works from both the dev server origin
+ * and the packaged file:// origin.
+ */
+const MEDIA_SCHEME = 'freecut-media'
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+])
 
 let win: BrowserWindow | null = null
 
@@ -33,7 +46,16 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow)
+function mediaUrlToFilePath(url: string): string {
+  let pathname = decodeURIComponent(new URL(url).pathname)
+  if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1) // Windows: /C:/x -> C:/x
+  return pathname
+}
+
+app.whenReady().then(() => {
+  protocol.handle(MEDIA_SCHEME, (request) => net.fetch(pathToFileURL(mediaUrlToFilePath(request.url)).href))
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

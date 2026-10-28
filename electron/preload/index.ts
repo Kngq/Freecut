@@ -1,11 +1,16 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { FreecutApi } from '@shared/ipc'
 
-/** Builds a file:// URL, escaping characters like '#', '?', '%' and spaces that break a raw path. */
+/**
+ * Builds a freecut-media:// URL, escaping characters like '#', '?', '%' and spaces that
+ * break a raw path. Not a plain file:// URL: the renderer runs on http://localhost in dev,
+ * and Chromium rejects <video>/<audio> loading a file:// source cross-scheme from there.
+ * The main process serves this custom scheme from the real file (see electron/main/index.ts).
+ */
 function toFileUrl(filePath: string): string {
   let p = filePath.replace(/\\/g, '/')
   if (!p.startsWith('/')) p = `/${p}` // Windows drive paths: C:/x -> /C:/x
-  return `file://${p.split('/').map((seg, i) => (i === 1 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg))).join('/')}`
+  return `freecut-media://${p.split('/').map((seg, i) => (i === 1 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg))).join('/')}`
 }
 
 const api: FreecutApi = {
