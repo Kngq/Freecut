@@ -190,18 +190,30 @@ input[type='number'] {
   background: var(--bg-0);
   padding: 12px;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .preview-canvas-wrap {
   position: relative;
+  height: 100%;
+  width: 100%;
   max-height: 100%;
   max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 canvas.preview-canvas {
   background: #000;
   display: block;
-  max-height: 55vh;
+  /* Bounded by the wrap, not a fixed vh value, so dragging the timeline-height resize handle
+     (growing the timeline shrinks .preview-area's real height via the app's grid row) shrinks
+     the preview in step instead of letting it overflow past its row and sit on top of the
+     timeline. Canvas keeps its own width/height attrs (the project's resolution) as intrinsic
+     size, so capping both axes here still preserves aspect ratio. */
+  max-height: 100%;
   max-width: 100%;
   border: 1px solid var(--border);
 }
