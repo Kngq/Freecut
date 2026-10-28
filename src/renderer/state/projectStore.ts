@@ -530,8 +530,15 @@ export const useProjectStore = create<ProjectState>((set) => ({
     set((s) => {
       const found = findClip(s.project, clipId)
       if (!found) return {}
+      // Keep the keyframe list sorted by time, same as setClipSpeedKeyframes — otherwise an
+      // "Add point" (which appends) leaves the Inspector's row order out of sync with playback
+      // order, even though interpolateTransform/piecewiseLinearExpr both sort internally and
+      // are unaffected either way.
+      const sortedTransform = transform.keyframes
+        ? { ...transform, keyframes: [...transform.keyframes].sort((a, b) => a.time - b.time) }
+        : transform
       const project = updateTrack(s.project, found.track.id, (t) => {
-        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, transform } : c)) }
+        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, transform: sortedTransform } : c)) }
         return repackVideoTrack(withPatch)
       })
       return { project, dirty: true }
