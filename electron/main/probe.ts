@@ -39,7 +39,9 @@ export function probeMedia(filePath: string): Promise<ProbeResult | null> {
           duration: Number.isFinite(duration) ? duration : 0,
           width: videoStream ? Number(videoStream.width) : undefined,
           height: videoStream ? Number(videoStream.height) : undefined,
-          hasAudio: Boolean(audioStream)
+          hasAudio: Boolean(audioStream),
+          videoCodec: videoStream ? String(videoStream.codec_name ?? '') : undefined,
+          audioCodec: audioStream ? String(audioStream.codec_name ?? '') : undefined
         })
       } catch {
         resolve(null)

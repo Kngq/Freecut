@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { probeMedia } from './probe'
+import { ensurePreviewProxy } from './proxy'
 import { exportProject } from './export'
+import { handleMediaRequest } from './mediaProtocol'
 import { FILE_EXTENSION, type Project } from '@shared/types'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -13,9 +15,9 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 /**
  * The renderer loads from http://localhost:5173 in dev, so <video>/<audio> elements can't
  * load file:// sources directly — Chromium's media URL safety check rejects the cross-scheme
- * load. Serving local media through this privileged custom scheme instead (backed by
- * net.fetch, which handles Range requests for free) works from both the dev server origin
- * and the packaged file:// origin.
+ * load. Serving local media through this privileged custom scheme instead (handled by
+ * handleMediaRequest, which reads the file with Node fs directly — see that file for why not
+ * net.fetch) works from both the dev server origin and the packaged file:// origin.
  */
 const MEDIA_SCHEME = 'freecut-media'
 
@@ -46,14 +48,8 @@ function createWindow() {
   }
 }
 
-function mediaUrlToFilePath(url: string): string {
-  let pathname = decodeURIComponent(new URL(url).pathname)
-  if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1) // Windows: /C:/x -> C:/x
-  return pathname
-}
-
 app.whenReady().then(() => {
-  protocol.handle(MEDIA_SCHEME, (request) => net.fetch(pathToFileURL(mediaUrlToFilePath(request.url)).href))
+  protocol.handle(MEDIA_SCHEME, handleMediaRequest)
   createWindow()
 })
 
@@ -80,6 +76,10 @@ ipcMain.handle('media:openDialog', async () => {
 
 ipcMain.handle('media:probe', async (_e, filePath: string) => {
   return probeMedia(filePath)
+})
+
+ipcMain.handle('media:ensureProxy', async (_e, filePath: string, videoCodec?: string, audioCodec?: string) => {
+  return ensurePreviewProxy(filePath, videoCodec, audioCodec)
 })
 
 ipcMain.handle('project:saveDialog', async (_e, defaultName: string) => {

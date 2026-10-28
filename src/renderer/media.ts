@@ -17,6 +17,11 @@ export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
       skipped.push(basename(path))
       continue
     }
+    // Some codecs (ProRes, DNxHD, ...) demux fine in Chromium but never actually decode a
+    // frame — no error, just a permanently blank/silent clip. ensurePreviewProxy returns null
+    // immediately for anything already browser-playable, so this is a no-op for the common case.
+    const previewPath = probe.kind === 'image' ? undefined : (await window.api.ensurePreviewProxy(path, probe.videoCodec, probe.audioCodec)) ?? undefined
+
     assets.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       path,
@@ -25,7 +30,8 @@ export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
       duration: probe.duration,
       width: probe.width,
       height: probe.height,
-      hasAudio: probe.hasAudio
+      hasAudio: probe.hasAudio,
+      previewPath
     })
   }
   if (skipped.length > 0) alert(`Could not import:\n${skipped.join('\n')}`)

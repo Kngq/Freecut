@@ -104,6 +104,11 @@ export default function Preview() {
   // <video>/<audio> element can't load or play used to just never draw/sound with zero
   // indication why. Cleared the moment that element plays or loads successfully again.
   const errorsRef = useRef<Map<string, string>>(new Map())
+  // Codec safety-net: readyState/canplay can lie (observed with ProRes — demuxes fine, reports
+  // HAVE_ENOUGH_DATA, but videoWidth/videoHeight never leave 0, no error event ever fires).
+  // ensurePreviewProxy catches known-bad codecs proactively at import; this catches anything
+  // that slips through, by timing how long a clip has looked "ready" with no actual frame.
+  const zeroSizeStartRef = useRef<Map<string, number>>(new Map())
 
   function reportMediaError(clipId: string, assetName: string, message: string) {
     if (errorsRef.current.get(clipId) === message) return // already reported, don't spam
@@ -115,7 +120,7 @@ export default function Preview() {
     let el = videoPoolRef.current.get(clip.id)
     if (!el) {
       el = document.createElement('video')
-      el.src = window.api.fileUrl(asset.path)
+      el.src = window.api.fileUrl(asset.previewPath ?? asset.path)
       el.preload = 'auto'
       el.muted = true
       el.addEventListener('error', () => {
@@ -142,7 +147,7 @@ export default function Preview() {
     let el = audioPoolRef.current.get(clip.id)
     if (!el) {
       el = document.createElement('audio')
-      el.src = window.api.fileUrl(asset.path)
+      el.src = window.api.fileUrl(asset.previewPath ?? asset.path)
       el.preload = 'auto'
       el.addEventListener('error', () => {
         const reason = el!.error ? mediaErrorReason(el!.error.code) : 'failed to load'
@@ -243,7 +248,18 @@ export default function Preview() {
         const mute = clip.muted || clip.volume <= 0 || active.length > 1
         // Frozen clips hold a single source frame: seek there once, never actually play.
         syncMediaElement(video, desired, asset.duration, state.isPlaying && !clip.frozen, mute, clip.volume, clip, asset.name)
-        if (video.readyState >= 2) drawContain(ctx, video, width, height, finalAlpha, tf)
+        if (video.readyState >= 2) {
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            drawContain(ctx, video, width, height, finalAlpha, tf)
+            zeroSizeStartRef.current.delete(clip.id)
+          } else {
+            const firstSeen = zeroSizeStartRef.current.get(clip.id) ?? nowMs
+            zeroSizeStartRef.current.set(clip.id, firstSeen)
+            if (nowMs - firstSeen > 1200) {
+              reportMediaError(clip.id, asset.name, 'video stream could not be decoded (unsupported codec)')
+            }
+          }
+        }
         const err = errorsRef.current.get(clip.id)
         if (err) drawMediaError(ctx, width, height, asset.name, err)
       }

@@ -9,6 +9,10 @@ export interface MediaAsset {
   width?: number
   height?: number
   hasAudio: boolean
+  /** A browser-playable transcode of `path`, used only for live preview when the source codec
+   *  (e.g. ProRes) can't be decoded by Chromium's <video>/<audio> even though ffmpeg can.
+   *  Export always reads `path` directly, never this. */
+  previewPath?: string
 }
 
 export type TransitionType = 'crossfade' | 'dipToBlack'
