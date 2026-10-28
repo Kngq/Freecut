@@ -46,6 +46,7 @@ interface ProjectState {
   /** Replaces the whole speed-curve keyframe list; undefined disables the curve (falls back
    *  to the clip's flat `speed`). Points are sorted, and clamped to [trimIn,trimOut]/[0.1,4]. */
   setClipSpeedKeyframes: (clipId: string, keyframes: SpeedKeyframe[] | undefined) => void
+  setClipReversed: (clipId: string, reversed: boolean) => void
   /** Rejoins a clip with its immediate next sibling on the same video track — the inverse of
    *  Split. Only valid when canMergeWithNext() agrees; a no-op otherwise. */
   mergeWithNext: (clipId: string) => void
@@ -450,6 +451,17 @@ export const useProjectStore = create<ProjectState>((set) => ({
         : undefined
       const project = updateTrack(s.project, found.track.id, (t) => {
         const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, speedKeyframes: sanitized } : c)) }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true }
+    }),
+
+  setClipReversed: (clipId, reversed) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found || found.clip.kind !== 'media') return {}
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, reversed } : c)) }
         return repackVideoTrack(withPatch)
       })
       return { project, dirty: true }

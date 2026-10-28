@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test:export": "tsx scripts/testExport.ts",
     "test:export:speed": "tsx scripts/testExportSpeed.ts",
+    "test:export:reverse": "tsx scripts/testExportReverse.ts",
     "test": "vitest run"
   },
   "dependencies": {

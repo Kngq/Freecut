@@ -121,14 +121,15 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
 
   /**
-   * Returns one label holding the clip's trimmed, speed-adjusted, scaled/padded video — ready
-   * for concat/xfade (primary track) or overlay positioning (overlay tracks). A flat (no
-   * curve) 1x-speed clip produces exactly the single trim/setpts/scale chain this did before
-   * speed existed; a curve or non-1x flat speed assembles the clip from clipSpeedSegments()
-   * (one constant-speed trim+setpts per segment) and concats them before the scale/pad step.
-   * `reversed` export isn't implemented here (separate feature) — it belongs right after the
-   * concat below and before scale/pad, applied to the whole assembled (still-forward) clip via
-   * a `reverse` filter, not per-segment.
+   * Returns one label holding the clip's trimmed, speed-adjusted, (optionally reversed),
+   * scaled/padded video — ready for concat/xfade (primary track) or overlay positioning
+   * (overlay tracks). A flat (no curve) 1x-speed, non-reversed clip produces exactly the
+   * single trim/setpts/scale chain this did before speed/reverse existed; anything else
+   * (a curve, non-1x flat speed, or `reversed`) assembles the clip from clipSpeedSegments()
+   * (one constant-speed trim+setpts per segment, concatenated — always in ascending
+   * SOURCE-time order regardless of `reversed`), then applies a single `reverse` filter to
+   * the whole assembled (still-forward) result before scale/pad — reverse is a final flip,
+   * never per-segment, so it composes correctly with any speed curve.
    */
   function trimmedSegmentLabel(clip: MediaClip, asset: MediaAsset): string {
     const ref = inputFor(clip.assetId)
@@ -139,22 +140,39 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
     }
 
     const segments = clipSpeedSegments(clip)
-    if (segments.length === 1) {
+    if (segments.length === 1 && !clip.reversed) {
       const seg = segments[0]
       const ptsExpr = seg.speed === 1 ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${seg.speed}`
       filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr},${scalePadFor()}[${segLabel}]`)
       return segLabel
     }
 
-    const pieceLabels = segments.map((seg) => {
-      const piece = nextLabel('vspeed')
+    let assembledLabel: string
+    if (segments.length === 1) {
+      const seg = segments[0]
       const ptsExpr = seg.speed === 1 ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${seg.speed}`
-      filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr}[${piece}]`)
-      return piece
-    })
-    const concatLabel = nextLabel('vconcat')
-    filters.push(`${pieceLabels.map((l) => `[${l}]`).join('')}concat=n=${pieceLabels.length}:v=1:a=0[${concatLabel}]`)
-    filters.push(`[${concatLabel}]${scalePadFor()}[${segLabel}]`)
+      const pre = nextLabel('vpre')
+      filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr}[${pre}]`)
+      assembledLabel = pre
+    } else {
+      const pieceLabels = segments.map((seg) => {
+        const piece = nextLabel('vspeed')
+        const ptsExpr = seg.speed === 1 ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${seg.speed}`
+        filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr}[${piece}]`)
+        return piece
+      })
+      const concatLabel = nextLabel('vconcat')
+      filters.push(`${pieceLabels.map((l) => `[${l}]`).join('')}concat=n=${pieceLabels.length}:v=1:a=0[${concatLabel}]`)
+      assembledLabel = concatLabel
+    }
+
+    if (clip.reversed) {
+      const revLabel = nextLabel('vrev')
+      filters.push(`[${assembledLabel}]reverse[${revLabel}]`)
+      assembledLabel = revLabel
+    }
+
+    filters.push(`[${assembledLabel}]${scalePadFor()}[${segLabel}]`)
     return segLabel
   }
 
@@ -253,7 +271,7 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
     const delayMs = Math.round(clip.start * 1000)
     const segments = clipSpeedSegments(clip)
 
-    if (segments.length === 1 && segments[0].speed === 1) {
+    if (segments.length === 1 && segments[0].speed === 1 && !clip.reversed) {
       filters.push(
         `[${ref.index}:a]atrim=start=${segments[0].start}:end=${segments[0].end},asetpts=PTS-STARTPTS,` +
           `volume=${clip.volume},adelay=${delayMs}|${delayMs}[${trimmed}]`
@@ -272,7 +290,7 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
       filters.push(`[${ref.index}:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS${tempoChain}[${piece}]`)
       return piece
     })
-    const concatLabel =
+    let concatLabel =
       pieceLabels.length > 1
         ? (() => {
             const label = nextLabel('aconcat')
@@ -280,6 +298,15 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
             return label
           })()
         : pieceLabels[0]
+
+    // Mirrors trimmedSegmentLabel's video handling: reverse is a final flip applied to the
+    // whole assembled (still-forward) clip, not per-segment.
+    if (clip.reversed) {
+      const revLabel = nextLabel('arev')
+      filters.push(`[${concatLabel}]areverse[${revLabel}]`)
+      concatLabel = revLabel
+    }
+
     filters.push(`[${concatLabel}]volume=${clip.volume},adelay=${delayMs}|${delayMs}[${trimmed}]`)
     audioMixLabels.push(trimmed)
   }

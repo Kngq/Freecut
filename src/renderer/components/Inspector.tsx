@@ -11,6 +11,7 @@ export default function Inspector() {
   const updateMediaClipProps = useProjectStore((s) => s.updateMediaClipProps)
   const setClipSpeed = useProjectStore((s) => s.setClipSpeed)
   const setClipSpeedKeyframes = useProjectStore((s) => s.setClipSpeedKeyframes)
+  const setClipReversed = useProjectStore((s) => s.setClipReversed)
 
   let found: { track: typeof project.tracks[number]; clip: typeof project.tracks[number]['clips'][number]; index: number } | null = null
   for (const track of project.tracks) {
@@ -209,6 +210,17 @@ export default function Inspector() {
                 />
               </div>
             )}
+
+            <div className="field-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={clip.reversed}
+                  onChange={(e) => setClipReversed(clip.id, e.target.checked)}
+                />{' '}
+                Reversed
+              </label>
+            </div>
           </>
         )
       })()}
