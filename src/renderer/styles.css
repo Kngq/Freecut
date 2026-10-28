@@ -93,6 +93,28 @@ input[type='number'] {
   min-height: 0;
 }
 
+.resize-handle {
+  flex: none;
+  position: relative;
+  z-index: 3;
+  background: var(--border);
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--accent);
+}
+
+.resize-handle-vertical {
+  width: 5px;
+  cursor: col-resize;
+}
+
+.resize-handle-horizontal {
+  height: 5px;
+  cursor: row-resize;
+}
+
 .panel {
   background: var(--bg-1);
   border-right: 1px solid var(--border);

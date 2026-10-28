@@ -5,10 +5,18 @@ import Preview from './components/Preview'
 import Timeline from './components/Timeline'
 import Inspector from './components/Inspector'
 import Home from './components/Home'
+import ResizeHandle from './components/ResizeHandle'
 import { useProjectStore } from './state/projectStore'
+import { useLayoutStore } from './state/layoutStore'
 
 export default function App() {
   const [view, setView] = useState<'home' | 'editor'>('home')
+  const mediaBinWidth = useLayoutStore((s) => s.mediaBinWidth)
+  const inspectorWidth = useLayoutStore((s) => s.inspectorWidth)
+  const timelineHeight = useLayoutStore((s) => s.timelineHeight)
+  const setMediaBinWidth = useLayoutStore((s) => s.setMediaBinWidth)
+  const setInspectorWidth = useLayoutStore((s) => s.setInspectorWidth)
+  const setTimelineHeight = useLayoutStore((s) => s.setTimelineHeight)
   const isPlaying = useProjectStore((s) => s.isPlaying)
   const setIsPlaying = useProjectStore((s) => s.setIsPlaying)
   const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
@@ -37,15 +45,18 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className="app" style={{ gridTemplateRows: `auto 1fr auto ${timelineHeight}px` }}>
       <Toolbar onGoHome={() => setView('home')} />
-      <div className="main">
+      <div className="main" style={{ gridTemplateColumns: `${mediaBinWidth}px auto 1fr auto ${inspectorWidth}px` }}>
         <MediaBin />
+        <ResizeHandle orientation="vertical" value={mediaBinWidth} onChange={setMediaBinWidth} />
         <div className="preview-area">
           <Preview />
         </div>
+        <ResizeHandle orientation="vertical" value={inspectorWidth} onChange={setInspectorWidth} invert />
         <Inspector />
       </div>
+      <ResizeHandle orientation="horizontal" value={timelineHeight} onChange={setTimelineHeight} invert />
       <Timeline />
     </div>
   )
