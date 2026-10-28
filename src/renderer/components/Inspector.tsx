@@ -60,25 +60,25 @@ export default function Inspector() {
             <input type="text" value={clip.color} onChange={(e) => updateTextClip(clip.id, { color: e.target.value })} />
           </div>
           <div className="field-row">
-            <label>Position X ({clip.x.toFixed(2)})</label>
+            <label>Position X ({clip.transform.x.toFixed(2)})</label>
             <input
               type="range"
               min={0}
               max={1}
               step={0.01}
-              value={clip.x}
-              onChange={(e) => updateTextClip(clip.id, { x: Number(e.target.value) })}
+              value={clip.transform.x}
+              onChange={(e) => updateTextClip(clip.id, { transform: { ...clip.transform, x: Number(e.target.value) } })}
             />
           </div>
           <div className="field-row">
-            <label>Position Y ({clip.y.toFixed(2)})</label>
+            <label>Position Y ({clip.transform.y.toFixed(2)})</label>
             <input
               type="range"
               min={0}
               max={1}
               step={0.01}
-              value={clip.y}
-              onChange={(e) => updateTextClip(clip.id, { y: Number(e.target.value) })}
+              value={clip.transform.y}
+              onChange={(e) => updateTextClip(clip.id, { transform: { ...clip.transform, y: Number(e.target.value) } })}
             />
           </div>
           <div className="field-row">

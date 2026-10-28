@@ -2,7 +2,10 @@ import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
 import {
   createEmptyProject,
+  defaultTransform,
+  effectiveDuration,
   projectDuration,
+  sourceTimeFor,
   type Clip,
   type MediaAsset,
   type MediaClip,
@@ -61,25 +64,34 @@ function touch(project: Project): Project {
   return { ...project, updatedAt: Date.now() }
 }
 
+/** A clip's length on the timeline: speed/curve/frozen-aware for media clips, the plain
+ *  field for text clips (which have no speed concept). */
+function clipTimelineDuration(c: Clip): number {
+  return c.kind === 'media' ? effectiveDuration(c) : c.duration
+}
+
 /**
  * Video tracks are a contiguous roll: array order === playback order, and `start` is a
  * derived value, not something a drag can set freely. A transitionIn pulls a clip's start
  * back by its (clamped) duration, exactly mirroring the xfade offset math in ffmpegGraph.ts
- * so the canvas preview and the exported file always agree.
+ * so the canvas preview and the exported file always agree. `duration` is also re-derived
+ * here for media clips (speed/curve/frozen can change it) and cached onto the clip so other
+ * code (Timeline width, projectDuration) can keep reading `clip.duration` directly.
  */
 function repackVideoTrack(track: Track): Track {
   if (track.type !== 'video') return track
   const clips = track.clips
   let cursor = 0
   const repacked = clips.map((c, i) => {
+    const dur = clipTimelineDuration(c)
     if (i === 0) {
-      cursor = c.duration
-      return { ...c, start: 0, transitionIn: undefined } as Clip
+      cursor = dur
+      return { ...c, start: 0, duration: dur, transitionIn: undefined } as Clip
     }
-    const d = Math.min(c.transitionIn?.duration ?? 0, cursor, c.duration)
+    const d = Math.min(c.transitionIn?.duration ?? 0, cursor, dur)
     const start = cursor - d
-    cursor = start + c.duration
-    return { ...c, start } as Clip
+    cursor = start + dur
+    return { ...c, start, duration: dur } as Clip
   })
   return { ...track, clips: repacked }
 }
@@ -132,7 +144,11 @@ export const useProjectStore = create<ProjectState>((set) => ({
         trimOut: asset.kind === 'image' ? duration : asset.duration,
         assetId: asset.id,
         volume: 1,
-        muted: false
+        muted: false,
+        speed: 1,
+        reversed: false,
+        frozen: false,
+        transform: defaultTransform()
       }
       const project = updateTrack(s.project, trackId, (t) => {
         let clips = [...t.clips, clip]
@@ -157,9 +173,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
         text: 'New text',
         fontSize: 64,
         color: 'white',
-        x: 0.5,
-        y: 0.5,
-        bold: true
+        bold: true,
+        transform: defaultTransform()
       }
       const project = updateTrack(s.project, trackId, (t) => ({ ...t, clips: [...t.clips, clip] }))
       return { project, dirty: true, selectedClipId: clip.id }
@@ -229,24 +244,48 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const found = findClip(s.project, clipId)
       if (!found) return {}
       const clip = found.clip
+
+      // Frozen clips hold a single source frame; trimming just changes how long it's held,
+      // not which source frame (trimIn/trimOut stay pinned together).
+      if (clip.kind === 'media' && clip.frozen) {
+        const newDuration = edge === 'start' ? clip.start + clip.duration - newTime : newTime - clip.start
+        if (newDuration < 0.1) return {}
+        const patch: Partial<Clip> = { duration: newDuration }
+        if (edge === 'start' && found.track.type !== 'video') patch.start = newTime
+        const project = updateTrack(s.project, found.track.id, (t) => {
+          const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? ({ ...c, ...patch } as Clip) : c)) }
+          return repackVideoTrack(withPatch)
+        })
+        return { project, dirty: true }
+      }
+
+      // Curve-speed clips: dragging a timeline edge isn't curve-aware in v1 — edit the
+      // underlying trimIn/trimOut via the keyframe time fields in the Inspector instead.
+      if (clip.kind === 'media' && (clip.speedKeyframes?.length ?? 0) >= 2) return {}
+
       // Video and audio clips can't be trimmed outside their source file. Images and text are unbounded.
       const asset = clip.kind === 'media' ? s.project.assets.find((a) => a.id === clip.assetId) : undefined
       const sourceLimited = clip.kind === 'media' && asset !== undefined && asset.kind !== 'image'
+      // trimIn/trimOut are SOURCE seconds; a dragged timeline-seconds delta covers `speed`x
+      // as much source material.
+      const speed = clip.kind === 'media' ? clip.speed || 1 : 1
       let patch: Partial<Clip> = {}
       if (edge === 'start') {
         let delta = Math.max(newTime, 0) - clip.start
-        if (sourceLimited && clip.kind === 'media') delta = Math.max(delta, -clip.trimIn)
+        if (sourceLimited && clip.kind === 'media') delta = Math.max(delta, -clip.trimIn / speed)
         const newDuration = clip.duration - delta
         if (newDuration < 0.1) return {}
         patch = { duration: newDuration }
         if (found.track.type !== 'video') patch.start = clip.start + delta
-        if (clip.kind === 'media') patch = { ...patch, trimIn: clip.trimIn + delta } as Partial<MediaClip>
+        if (clip.kind === 'media') patch = { ...patch, trimIn: clip.trimIn + delta * speed } as Partial<MediaClip>
       } else {
         let newDuration = newTime - clip.start
-        if (sourceLimited && clip.kind === 'media') newDuration = Math.min(newDuration, asset.duration - clip.trimIn)
+        if (sourceLimited && clip.kind === 'media' && asset) {
+          newDuration = Math.min(newDuration, (asset.duration - clip.trimIn) / speed)
+        }
         if (newDuration < 0.1) return {}
         patch = { duration: newDuration }
-        if (clip.kind === 'media') patch = { ...patch, trimOut: clip.trimIn + newDuration } as Partial<MediaClip>
+        if (clip.kind === 'media') patch = { ...patch, trimOut: clip.trimIn + newDuration * speed } as Partial<MediaClip>
       }
       const project = updateTrack(s.project, found.track.id, (t) => {
         const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? ({ ...c, ...patch } as Clip) : c)) }
@@ -270,9 +309,44 @@ export const useProjectStore = create<ProjectState>((set) => ({
 
       let first: Clip
       let second: Clip
-      if (clip.kind === 'media') {
-        first = { ...clip, duration: firstDuration, trimOut: clip.trimIn + firstDuration }
-        second = { ...clip, id: uuid(), start: t, duration: secondDuration, trimIn: clip.trimIn + firstDuration, transitionIn: undefined }
+      if (clip.kind === 'media' && clip.frozen) {
+        // Both halves keep holding the same source frame, just for less time each.
+        first = { ...clip, duration: firstDuration }
+        second = { ...clip, id: uuid(), start: t, duration: secondDuration, transitionIn: undefined }
+      } else if (clip.kind === 'media') {
+        // sourceTimeFor already accounts for speed curves and `reversed` — it's exactly the
+        // source position the playhead is sitting on right now.
+        const splitSource = sourceTimeFor(clip, firstDuration)
+        // A speed curve can't be precisely partitioned across a split in v1 — both halves
+        // fall back to a flat 1x rather than carry a curve that no longer matches their range.
+        const hasCurve = (clip.speedKeyframes?.length ?? 0) >= 2
+        const speed = hasCurve ? 1 : clip.speed
+        if (clip.reversed) {
+          first = { ...clip, duration: firstDuration, trimIn: splitSource, trimOut: clip.trimOut, speed, speedKeyframes: undefined }
+          second = {
+            ...clip,
+            id: uuid(),
+            start: t,
+            duration: secondDuration,
+            trimIn: clip.trimIn,
+            trimOut: splitSource,
+            speed,
+            speedKeyframes: undefined,
+            transitionIn: undefined
+          }
+        } else {
+          first = { ...clip, duration: firstDuration, trimOut: splitSource, speed, speedKeyframes: undefined }
+          second = {
+            ...clip,
+            id: uuid(),
+            start: t,
+            duration: secondDuration,
+            trimIn: splitSource,
+            speed,
+            speedKeyframes: undefined,
+            transitionIn: undefined
+          }
+        }
       } else {
         first = { ...clip, duration: firstDuration }
         second = { ...clip, id: uuid(), start: t, duration: secondDuration, transitionIn: undefined }

@@ -27,6 +27,29 @@ function sortedClips<T extends Clip>(track: Track): T[] {
 }
 
 /**
+ * Builds an ffmpeg filter expression that linearly interpolates a value across a sorted list
+ * of (time, value) keyframes as a function of `timeVar` (e.g. `t` inside an overlay/enable
+ * expression, `T` inside most other filters). Clamps to the first/last value outside the
+ * keyframe range. This is the export-side mirror of `interpolateTransform` in shared/types.ts —
+ * used by the keyframe-animation feature for position/scale/opacity (x/y/scale/opacity each
+ * get their own call), one property per invocation.
+ */
+export function piecewiseLinearExpr(keyframes: { time: number; value: number }[], timeVar: string): string {
+  const sorted = [...keyframes].sort((a, b) => a.time - b.time)
+  if (sorted.length === 0) return '0'
+  if (sorted.length === 1) return String(sorted[0].value)
+  let expr = String(sorted[sorted.length - 1].value)
+  for (let i = sorted.length - 2; i >= 0; i--) {
+    const a = sorted[i]
+    const b = sorted[i + 1]
+    const span = b.time - a.time
+    const interp = span <= 0 ? String(b.value) : `(${a.value}+(${b.value}-${a.value})*(${timeVar}-${a.time})/${span})`
+    expr = `if(lt(${timeVar},${b.time}),${interp},${expr})`
+  }
+  return `if(lt(${timeVar},${sorted[0].time}),${sorted[0].value},${expr})`
+}
+
+/**
  * Builds the ffmpeg inputs + filter_complex needed to render a Project to a single
  * output file. Scope (barebones v1):
  *  - One or more video tracks, composited bottom-to-top with `overlay`, each clip's own
@@ -163,8 +186,10 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
       const end = clip.start + clip.duration
       const fontColor = clip.color || 'white'
       const fontSize = Math.round(clip.fontSize)
-      const xExpr = `(w-text_w)*${clip.x}`
-      const yExpr = `(h-text_h)*${clip.y}`
+      // Static transform only for now — keyframed text position/scale/opacity export lands
+      // with the keyframe-animation feature, which reuses piecewiseLinearExpr below.
+      const xExpr = `(w-text_w)*${clip.transform.x}`
+      const yExpr = `(h-text_h)*${clip.transform.y}`
       filters.push(
         `[${videoOutLabel}]drawtext=text='${escapeDrawtext(clip.text)}':fontcolor=${fontColor}:fontsize=${fontSize}` +
           `:x=${xExpr}:y=${yExpr}:enable='between(t,${start},${end})'[${out}]`

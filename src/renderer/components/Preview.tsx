@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../state/projectStore'
 import type { Clip, MediaAsset, MediaClip, Project, Track } from '@shared/types'
-import { projectDuration } from '@shared/types'
+import { interpolateTransform, projectDuration, sourceTimeFor } from '@shared/types'
 
 const SEEK_DRIFT_THRESHOLD = 0.12
 
@@ -34,18 +34,28 @@ function findActiveMedia(track: Track, assetById: Map<string, MediaAsset>, t: nu
   return result
 }
 
-function drawContain(ctx: CanvasRenderingContext2D, media: HTMLVideoElement | HTMLImageElement, canvasW: number, canvasH: number, alpha: number) {
+/** Draws media "contain"-fit within the canvas, then scaled and re-centered by the clip's
+ *  (possibly keyframed) transform: `scale` enlarges around the fit size, `x`/`y` (0-1) move
+ *  the center away from the canvas middle. */
+function drawContain(
+  ctx: CanvasRenderingContext2D,
+  media: HTMLVideoElement | HTMLImageElement,
+  canvasW: number,
+  canvasH: number,
+  alpha: number,
+  transform: { x: number; y: number; scale: number }
+) {
   const mw = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth
   const mh = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight
   if (!mw || !mh) return
-  const scale = Math.min(canvasW / mw, canvasH / mh)
-  const w = mw * scale
-  const h = mh * scale
-  const x = (canvasW - w) / 2
-  const y = (canvasH - h) / 2
+  const fit = Math.min(canvasW / mw, canvasH / mh) * transform.scale
+  const w = mw * fit
+  const h = mh * fit
+  const cx = canvasW * transform.x
+  const cy = canvasH * transform.y
   const prevAlpha = ctx.globalAlpha
   ctx.globalAlpha = alpha
-  ctx.drawImage(media, x, y, w, h)
+  ctx.drawImage(media, cx - w / 2, cy - h / 2, w, h)
   ctx.globalAlpha = prevAlpha
 }
 
@@ -148,17 +158,21 @@ export default function Preview() {
       if (track.type !== 'video' || track.hidden) continue
       const active = findActiveMedia(track, assetById, t)
       for (const { clip, asset, alpha } of active) {
+        const localT = t - clip.start
+        const tf = interpolateTransform(clip.transform, localT)
+        const finalAlpha = alpha * tf.opacity
         if (asset.kind === 'image') {
           const img = getImageEl(asset)
-          if (img.complete) drawContain(ctx, img, width, height, alpha)
+          if (img.complete) drawContain(ctx, img, width, height, finalAlpha, tf)
           continue
         }
         const video = getVideoEl(clip, asset)
         liveClipIds.add(clip.id)
-        const desired = clip.trimIn + (t - clip.start)
+        const desired = sourceTimeFor(clip, localT)
         const mute = clip.muted || clip.volume <= 0 || active.length > 1
-        syncMediaElement(video, desired, asset.duration, state.isPlaying, mute, clip.volume)
-        if (video.readyState >= 2) drawContain(ctx, video, width, height, alpha)
+        // Frozen clips hold a single source frame: seek there once, never actually play.
+        syncMediaElement(video, desired, asset.duration, state.isPlaying && !clip.frozen, mute, clip.volume)
+        if (video.readyState >= 2) drawContain(ctx, video, width, height, finalAlpha, tf)
       }
     }
 
@@ -177,8 +191,8 @@ export default function Preview() {
         if (!asset) continue
         const audioEl = getAudioEl(clip, asset)
         liveAudioIds.add(clip.id)
-        const desired = clip.trimIn + (t - clip.start)
-        syncMediaElement(audioEl, desired, asset.duration, state.isPlaying, clip.muted || clip.volume <= 0, clip.volume)
+        const desired = sourceTimeFor(clip, t - clip.start)
+        syncMediaElement(audioEl, desired, asset.duration, state.isPlaying && !clip.frozen, clip.muted || clip.volume <= 0, clip.volume)
       }
     }
     for (const [clipId, el] of audioPoolRef.current) {
@@ -191,16 +205,21 @@ export default function Preview() {
       for (const clip of track.clips as Clip[]) {
         if (clip.kind !== 'text') continue
         if (t < clip.start || t >= clip.start + clip.duration) continue
-        ctx.font = `${clip.bold ? 'bold ' : ''}${clip.fontSize}px sans-serif`
+        const tf = interpolateTransform(clip.transform, t - clip.start)
+        const fontSize = clip.fontSize * tf.scale
+        ctx.font = `${clip.bold ? 'bold ' : ''}${fontSize}px sans-serif`
         ctx.fillStyle = clip.color || 'white'
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
         const metrics = ctx.measureText(clip.text)
         const textW = metrics.width
-        const textH = clip.fontSize * 1.2
-        const x = (width - textW) * clip.x
-        const y = (height - textH) * clip.y
+        const textH = fontSize * 1.2
+        const x = (width - textW) * tf.x
+        const y = (height - textH) * tf.y
+        const prevAlpha = ctx.globalAlpha
+        ctx.globalAlpha = tf.opacity
         ctx.fillText(clip.text, x, y)
+        ctx.globalAlpha = prevAlpha
       }
     }
 
