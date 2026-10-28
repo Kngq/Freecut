@@ -12,7 +12,9 @@ function TabIcon({ children }: { children: ReactNode }) {
   )
 }
 
-const TABS: { id: string; label: string; enabled: boolean; icon: ReactNode }[] = [
+type TabId = 'media' | 'audio' | 'text' | 'stickers' | 'effects' | 'transitions' | 'captions' | 'filters' | 'adjust'
+
+const TABS: { id: TabId; label: string; enabled: boolean; icon: ReactNode }[] = [
   {
     id: 'media',
     label: 'Media',
@@ -27,7 +29,7 @@ const TABS: { id: string; label: string; enabled: boolean; icon: ReactNode }[] =
   {
     id: 'audio',
     label: 'Audio',
-    enabled: false,
+    enabled: true,
     icon: (
       <TabIcon>
         <line x1="4" y1="9" x2="4" y2="15" />
@@ -41,7 +43,7 @@ const TABS: { id: string; label: string; enabled: boolean; icon: ReactNode }[] =
   {
     id: 'text',
     label: 'Text',
-    enabled: false,
+    enabled: true,
     icon: (
       <TabIcon>
         <line x1="5" y1="6" x2="19" y2="6" />
@@ -125,8 +127,10 @@ export default function MediaBin() {
   const addAsset = useProjectStore((s) => s.addAsset)
   const removeAsset = useProjectStore((s) => s.removeAsset)
   const addMediaClipToTrack = useProjectStore((s) => s.addMediaClipToTrack)
+  const addTextClipToTrack = useProjectStore((s) => s.addTextClipToTrack)
   const playhead = useProjectStore((s) => s.playhead)
   const [dropActive, setDropActive] = useState(false)
+  const [activeTab, setActiveTab] = useState<TabId>('media')
 
   async function importPaths(paths: string[]) {
     for (const asset of await assetsFromPaths(paths)) addAsset(asset)
@@ -141,6 +145,11 @@ export default function MediaBin() {
     const track = project.tracks.find((t) => t.type === trackType)
     if (!track) return
     addMediaClipToTrack(track.id, asset, playhead)
+  }
+
+  function handleAddText() {
+    const textTrack = project.tracks.find((t) => t.type === 'text')
+    if (textTrack) addTextClipToTrack(textTrack.id, playhead)
   }
 
   function handleRemoveAsset(asset: MediaAsset, e: React.MouseEvent) {
@@ -170,32 +179,11 @@ export default function MediaBin() {
     void importPaths(paths)
   }
 
-  return (
-    <div
-      className={`panel media-bin ${dropActive ? 'drop-active' : ''}`}
-      onDragOver={onDragOver}
-      onDragLeave={() => setDropActive(false)}
-      onDrop={onDrop}
-    >
-      <div className="media-tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            className={`media-tab ${tab.id === 'media' ? 'active' : ''}`}
-            disabled={!tab.enabled}
-            title={tab.enabled ? undefined : 'Coming soon'}
-          >
-            {tab.icon}
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
-      <div className="media-bin-body">
-        <button onClick={handleImport} style={{ width: '100%', marginBottom: 10 }}>
-          + Import media
-        </button>
-        {project.assets.length === 0 && <div className="empty-hint">No media imported yet. Drop files here or onto the timeline.</div>}
-        {project.assets.map((asset) => (
+  function renderAssetList(assets: MediaAsset[], emptyHint: string) {
+    return (
+      <>
+        {assets.length === 0 && <div className="empty-hint">{emptyHint}</div>}
+        {assets.map((asset) => (
           <div
             className="asset-item"
             key={asset.id}
@@ -217,7 +205,61 @@ export default function MediaBin() {
             </div>
           </div>
         ))}
+      </>
+    )
+  }
+
+  return (
+    <div
+      className={`panel media-bin ${dropActive ? 'drop-active' : ''}`}
+      onDragOver={onDragOver}
+      onDragLeave={() => setDropActive(false)}
+      onDrop={onDrop}
+    >
+      <div className="media-tabs">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={`media-tab ${tab.id === activeTab ? 'active' : ''}`}
+            disabled={!tab.enabled}
+            title={tab.enabled ? undefined : 'Coming soon'}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.icon}
+            <span>{tab.label}</span>
+          </button>
+        ))}
       </div>
+      {activeTab === 'media' && (
+        <div className="media-bin-body">
+          <button onClick={handleImport} style={{ width: '100%', marginBottom: 10 }}>
+            + Import media
+          </button>
+          {renderAssetList(
+            project.assets.filter((a) => a.kind !== 'audio'),
+            'No media imported yet. Drop files here or onto the timeline.'
+          )}
+        </div>
+      )}
+      {activeTab === 'audio' && (
+        <div className="media-bin-body">
+          <button onClick={handleImport} style={{ width: '100%', marginBottom: 10 }}>
+            + Import audio
+          </button>
+          {renderAssetList(
+            project.assets.filter((a) => a.kind === 'audio'),
+            'No audio imported yet. Drop audio files here or onto the timeline.'
+          )}
+        </div>
+      )}
+      {activeTab === 'text' && (
+        <div className="media-bin-body">
+          <button onClick={handleAddText} style={{ width: '100%', marginBottom: 10 }}>
+            + Add text
+          </button>
+          <div className="empty-hint">Adds a text clip to the Text track at the playhead.</div>
+        </div>
+      )}
     </div>
   )
 }
