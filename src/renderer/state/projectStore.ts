@@ -10,6 +10,7 @@ import {
   type MediaAsset,
   type MediaClip,
   type Project,
+  type SpeedKeyframe,
   type Track,
   type TrackType
 } from '@shared/types'
@@ -41,6 +42,10 @@ interface ProjectState {
 
   trimClip: (clipId: string, edge: 'start' | 'end', newTime: number) => void
   splitClipAtPlayhead: () => void
+  setClipSpeed: (clipId: string, speed: number) => void
+  /** Replaces the whole speed-curve keyframe list; undefined disables the curve (falls back
+   *  to the clip's flat `speed`). Points are sorted, and clamped to [trimIn,trimOut]/[0.1,4]. */
+  setClipSpeedKeyframes: (clipId: string, keyframes: SpeedKeyframe[] | undefined) => void
   /** Rejoins a clip with its immediate next sibling on the same video track — the inverse of
    *  Split. Only valid when canMergeWithNext() agrees; a no-op otherwise. */
   mergeWithNext: (clipId: string) => void
@@ -413,6 +418,38 @@ export const useProjectStore = create<ProjectState>((set) => ({
           ...t,
           clips: t.clips.map((c) => (c.id === clipId ? { ...c, transitionIn: duration > 0 ? { type: 'crossfade' as const, duration } : undefined } : c))
         }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true }
+    }),
+
+  setClipSpeed: (clipId, speed) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found || found.clip.kind !== 'media') return {}
+      const clamped = Math.min(Math.max(speed, 0.1), 4)
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, speed: clamped } : c)) }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true }
+    }),
+
+  setClipSpeedKeyframes: (clipId, keyframes) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found || found.clip.kind !== 'media') return {}
+      const clip = found.clip as MediaClip
+      const sanitized = keyframes
+        ? [...keyframes]
+            .sort((a, b) => a.time - b.time)
+            .map((k) => ({
+              time: Math.min(Math.max(k.time, clip.trimIn), clip.trimOut),
+              speed: Math.min(Math.max(k.speed, 0.1), 4)
+            }))
+        : undefined
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, speedKeyframes: sanitized } : c)) }
         return repackVideoTrack(withPatch)
       })
       return { project, dirty: true }

@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "test:export": "tsx scripts/testExport.ts",
+    "test:export:speed": "tsx scripts/testExportSpeed.ts",
     "test": "vitest run"
   },
   "dependencies": {

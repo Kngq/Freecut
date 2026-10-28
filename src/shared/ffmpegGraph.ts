@@ -1,4 +1,4 @@
-import type { Clip, MediaAsset, MediaClip, Project, Track } from './types'
+import { clipSpeedSegments, type Clip, type MediaAsset, type MediaClip, type Project, type Track } from './types'
 
 export interface FfmpegPlan {
   inputs: string[] // -i arguments, in order; filter graph refers to them as [0:v], [1:v], etc.
@@ -47,6 +47,26 @@ export function piecewiseLinearExpr(keyframes: { time: number; value: number }[]
     expr = `if(lt(${timeVar},${b.time}),${interp},${expr})`
   }
   return `if(lt(${timeVar},${sorted[0].time}),${sorted[0].value},${expr})`
+}
+
+/**
+ * ffmpeg's `atempo` filter only accepts a 0.5-2.0 rate per instance, so a speed outside that
+ * range needs to be expressed as a chain of several (e.g. 3x -> atempo=2,atempo=1.5). Always
+ * returns at least one factor; a flat `[1]` means "no atempo needed at all".
+ */
+export function atempoFactors(speed: number): number[] {
+  const factors: number[] = []
+  let remaining = speed
+  while (remaining > 2) {
+    factors.push(2)
+    remaining /= 2
+  }
+  while (remaining < 0.5) {
+    factors.push(0.5)
+    remaining /= 0.5
+  }
+  factors.push(remaining)
+  return factors
 }
 
 /**
@@ -100,16 +120,41 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
     `scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
 
+  /**
+   * Returns one label holding the clip's trimmed, speed-adjusted, scaled/padded video — ready
+   * for concat/xfade (primary track) or overlay positioning (overlay tracks). A flat (no
+   * curve) 1x-speed clip produces exactly the single trim/setpts/scale chain this did before
+   * speed existed; a curve or non-1x flat speed assembles the clip from clipSpeedSegments()
+   * (one constant-speed trim+setpts per segment) and concats them before the scale/pad step.
+   * `reversed` export isn't implemented here (separate feature) — it belongs right after the
+   * concat below and before scale/pad, applied to the whole assembled (still-forward) clip via
+   * a `reverse` filter, not per-segment.
+   */
   function trimmedSegmentLabel(clip: MediaClip, asset: MediaAsset): string {
     const ref = inputFor(clip.assetId)
     const segLabel = nextLabel('vseg')
     if (asset.kind === 'image') {
       filters.push(`[${ref.index}:v]trim=duration=${clip.duration},${scalePadFor()},setpts=PTS-STARTPTS[${segLabel}]`)
-    } else {
-      filters.push(
-        `[${ref.index}:v]trim=start=${clip.trimIn}:end=${clip.trimOut},setpts=PTS-STARTPTS,${scalePadFor()}[${segLabel}]`
-      )
+      return segLabel
     }
+
+    const segments = clipSpeedSegments(clip)
+    if (segments.length === 1) {
+      const seg = segments[0]
+      const ptsExpr = seg.speed === 1 ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${seg.speed}`
+      filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr},${scalePadFor()}[${segLabel}]`)
+      return segLabel
+    }
+
+    const pieceLabels = segments.map((seg) => {
+      const piece = nextLabel('vspeed')
+      const ptsExpr = seg.speed === 1 ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${seg.speed}`
+      filters.push(`[${ref.index}:v]trim=start=${seg.start}:end=${seg.end},setpts=${ptsExpr}[${piece}]`)
+      return piece
+    })
+    const concatLabel = nextLabel('vconcat')
+    filters.push(`${pieceLabels.map((l) => `[${l}]`).join('')}concat=n=${pieceLabels.length}:v=1:a=0[${concatLabel}]`)
+    filters.push(`[${concatLabel}]${scalePadFor()}[${segLabel}]`)
     return segLabel
   }
 
@@ -205,10 +250,37 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
     if (!asset.hasAudio || clip.muted || clip.volume <= 0) return
     const ref = inputFor(clip.assetId)
     const trimmed = nextLabel('atrim')
-    filters.push(
-      `[${ref.index}:a]atrim=start=${clip.trimIn}:end=${clip.trimOut},asetpts=PTS-STARTPTS,` +
-        `volume=${clip.volume},adelay=${Math.round(clip.start * 1000)}|${Math.round(clip.start * 1000)}[${trimmed}]`
-    )
+    const delayMs = Math.round(clip.start * 1000)
+    const segments = clipSpeedSegments(clip)
+
+    if (segments.length === 1 && segments[0].speed === 1) {
+      filters.push(
+        `[${ref.index}:a]atrim=start=${segments[0].start}:end=${segments[0].end},asetpts=PTS-STARTPTS,` +
+          `volume=${clip.volume},adelay=${delayMs}|${delayMs}[${trimmed}]`
+      )
+      audioMixLabels.push(trimmed)
+      return
+    }
+
+    // atempo only accepts 0.5-2.0 per instance, so each segment's speed may need chaining
+    // (see atempoFactors). Segments are assembled first, then volume/adelay applied once to
+    // the whole concatenated clip (those don't need to vary per segment).
+    const pieceLabels = segments.map((seg) => {
+      const piece = nextLabel('aspeed')
+      const factors = atempoFactors(seg.speed)
+      const tempoChain = factors.length === 1 && factors[0] === 1 ? '' : `,${factors.map((f) => `atempo=${f}`).join(',')}`
+      filters.push(`[${ref.index}:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS${tempoChain}[${piece}]`)
+      return piece
+    })
+    const concatLabel =
+      pieceLabels.length > 1
+        ? (() => {
+            const label = nextLabel('aconcat')
+            filters.push(`${pieceLabels.map((l) => `[${l}]`).join('')}concat=n=${pieceLabels.length}:v=0:a=1[${label}]`)
+            return label
+          })()
+        : pieceLabels[0]
+    filters.push(`[${concatLabel}]volume=${clip.volume},adelay=${delayMs}|${delayMs}[${trimmed}]`)
     audioMixLabels.push(trimmed)
   }
 
