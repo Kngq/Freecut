@@ -114,6 +114,7 @@ input[type='number'] {
 }
 
 .asset-item {
+  position: relative;
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -126,7 +127,29 @@ input[type='number'] {
   border-color: var(--accent);
 }
 
+.asset-item-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  padding: 0;
+  font-size: 12px;
+}
+
+.asset-item:hover .asset-item-remove {
+  display: block;
+}
+
 .asset-item .name {
+  padding-right: 18px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

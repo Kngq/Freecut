@@ -24,6 +24,8 @@ interface ProjectState {
   newProject: () => void
 
   addAsset: (asset: MediaAsset) => void
+  /** Removes an asset from the media pool and any clips on the timeline that reference it. */
+  removeAsset: (assetId: string) => void
   /** On video tracks the clip is appended unless `insertAtStart` is set, in which case it's placed at `start`. */
   addMediaClipToTrack: (trackId: string, asset: MediaAsset, start: number, options?: { insertAtStart?: boolean }) => void
   addTextClipToTrack: (trackId: string, start: number) => void
@@ -102,6 +104,18 @@ export const useProjectStore = create<ProjectState>((set) => ({
 
   addAsset: (asset) =>
     set((s) => ({ project: touch({ ...s.project, assets: [...s.project.assets, asset] }), dirty: true })),
+
+  removeAsset: (assetId) =>
+    set((s) => {
+      const tracks = s.project.tracks.map((t) => {
+        const clips = t.clips.filter((c) => !(c.kind === 'media' && c.assetId === assetId))
+        return t.type === 'video' ? repackVideoTrack({ ...t, clips }) : { ...t, clips }
+      })
+      const assets = s.project.assets.filter((a) => a.id !== assetId)
+      const project = touch({ ...s.project, tracks, assets })
+      const selectionStillExists = s.selectedClipId !== null && findClip(project, s.selectedClipId) !== null
+      return { project, dirty: true, selectedClipId: selectionStillExists ? s.selectedClipId : null }
+    }),
 
   addMediaClipToTrack: (trackId, asset, start, options) =>
     set((s) => {

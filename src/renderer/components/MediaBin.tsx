@@ -6,6 +6,7 @@ import { ASSET_DRAG_MIME, assetsFromPaths, droppedFilePaths } from '../media'
 export default function MediaBin() {
   const project = useProjectStore((s) => s.project)
   const addAsset = useProjectStore((s) => s.addAsset)
+  const removeAsset = useProjectStore((s) => s.removeAsset)
   const addMediaClipToTrack = useProjectStore((s) => s.addMediaClipToTrack)
   const playhead = useProjectStore((s) => s.playhead)
   const [dropActive, setDropActive] = useState(false)
@@ -23,6 +24,18 @@ export default function MediaBin() {
     const track = project.tracks.find((t) => t.type === trackType)
     if (!track) return
     addMediaClipToTrack(track.id, asset, playhead)
+  }
+
+  function handleRemoveAsset(asset: MediaAsset, e: React.MouseEvent) {
+    e.stopPropagation()
+    const usedCount = project.tracks.reduce(
+      (n, t) => n + t.clips.filter((c) => c.kind === 'media' && c.assetId === asset.id).length,
+      0
+    )
+    if (usedCount > 0 && !confirm(`"${asset.name}" is used in ${usedCount} clip${usedCount > 1 ? 's' : ''} on the timeline. Remove it and ${usedCount > 1 ? 'those clips' : 'that clip'}?`)) {
+      return
+    }
+    removeAsset(asset.id)
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -64,6 +77,9 @@ export default function MediaBin() {
           onDoubleClick={() => handleAddToTimeline(asset)}
           title="Drag onto the timeline, or double-click to add"
         >
+          <button className="asset-item-remove" title="Remove from media pool" onClick={(e) => handleRemoveAsset(asset, e)}>
+            ×
+          </button>
           <div className="name">{asset.name}</div>
           <div className="meta">
             {asset.kind}
