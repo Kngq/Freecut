@@ -139,6 +139,17 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
       return segLabel
     }
 
+    // Frozen clips hold a single source frame (trimIn === trimOut, which would be a
+    // zero-length span to clipSpeedSegments below) for the clip's authored `duration` —
+    // grab one frame and hold it with `tpad`'s clone mode, no speed/reverse/curve involved.
+    if (clip.frozen) {
+      const pre = nextLabel('vfreeze')
+      filters.push(`[${ref.index}:v]trim=start=${clip.trimIn}:end=${clip.trimIn + 1 / fps},setpts=PTS-STARTPTS,${scalePadFor()}[${pre}]`)
+      const holdDuration = Math.max(clip.duration - 1 / fps, 0)
+      filters.push(`[${pre}]tpad=stop_mode=clone:stop_duration=${holdDuration}[${segLabel}]`)
+      return segLabel
+    }
+
     const segments = clipSpeedSegments(clip)
     if (segments.length === 1 && !clip.reversed) {
       const seg = segments[0]

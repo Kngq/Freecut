@@ -42,6 +42,9 @@ interface ProjectState {
 
   trimClip: (clipId: string, edge: 'start' | 'end', newTime: number) => void
   splitClipAtPlayhead: () => void
+  /** Splits the clip at the playhead and inserts a 1s frozen hold at the cut — a no-op
+   *  unless canInsertFreezeFrame() agrees. */
+  insertFreezeFrame: (clipId: string) => void
   setClipSpeed: (clipId: string, speed: number) => void
   /** Replaces the whole speed-curve keyframe list; undefined disables the curve (falls back
    *  to the clip's flat `speed`). Points are sorted, and clamped to [trimIn,trimOut]/[0.1,4]. */
@@ -85,6 +88,19 @@ export function canMergeWithNext(project: Project, clipId: string): boolean {
   return Math.abs(next.trimIn - clip.trimOut) <= 1e-6
 }
 
+/** Whether a freeze frame can be inserted at `playhead` into `clipId`: it must be a plain
+ *  (non-frozen) media clip on a video track, and the playhead must sit strictly inside its
+ *  span (same tolerance splitClipAtPlayhead uses). Exported for the Toolbar to decide the
+ *  freeze-frame button's enabled state without duplicating this logic. */
+export function canInsertFreezeFrame(project: Project, playhead: number, clipId: string | null): boolean {
+  if (!clipId) return false
+  const found = findClip(project, clipId)
+  if (!found || found.track.type !== 'video') return false
+  const { clip } = found
+  if (clip.kind !== 'media' || clip.frozen) return false
+  return playhead > clip.start + 0.05 && playhead < clip.start + clip.duration - 0.05
+}
+
 function touch(project: Project): Project {
   return { ...project, updatedAt: Date.now() }
 }
@@ -124,6 +140,38 @@ function repackVideoTrack(track: Track): Track {
 function updateTrack(project: Project, trackId: string, fn: (t: Track) => Track): Project {
   const tracks = project.tracks.map((t) => (t.id === trackId ? fn(t) : t))
   return touch({ ...project, tracks })
+}
+
+/** Splits a non-frozen media clip at `firstDuration` (clip-local timeline seconds) into two
+ *  new halves whose trimIn/trimOut/speed correctly continue playback across the cut.
+ *  sourceTimeFor already accounts for speed curves and `reversed` — it's exactly the source
+ *  position the playhead is sitting on. A speed curve can't be precisely partitioned across a
+ *  cut in v1, so both halves fall back to a flat 1x rather than carry a curve that no longer
+ *  matches their range. Shared by splitClipAtPlayhead and insertFreezeFrame. */
+function splitMediaClipHalves(clip: MediaClip, firstDuration: number): { first: MediaClip; second: MediaClip } {
+  const secondDuration = clip.duration - firstDuration
+  const splitSource = sourceTimeFor(clip, firstDuration)
+  const hasCurve = (clip.speedKeyframes?.length ?? 0) >= 2
+  const speed = hasCurve ? 1 : clip.speed
+  const secondBase = {
+    ...clip,
+    id: uuid(),
+    start: clip.start + firstDuration,
+    duration: secondDuration,
+    speed,
+    speedKeyframes: undefined,
+    transitionIn: undefined
+  }
+  if (clip.reversed) {
+    return {
+      first: { ...clip, duration: firstDuration, trimIn: splitSource, trimOut: clip.trimOut, speed, speedKeyframes: undefined },
+      second: { ...secondBase, trimIn: clip.trimIn, trimOut: splitSource }
+    }
+  }
+  return {
+    first: { ...clip, duration: firstDuration, trimOut: splitSource, speed, speedKeyframes: undefined },
+    second: { ...secondBase, trimIn: splitSource, trimOut: clip.trimOut }
+  }
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({
@@ -339,39 +387,9 @@ export const useProjectStore = create<ProjectState>((set) => ({
         first = { ...clip, duration: firstDuration }
         second = { ...clip, id: uuid(), start: t, duration: secondDuration, transitionIn: undefined }
       } else if (clip.kind === 'media') {
-        // sourceTimeFor already accounts for speed curves and `reversed` — it's exactly the
-        // source position the playhead is sitting on right now.
-        const splitSource = sourceTimeFor(clip, firstDuration)
-        // A speed curve can't be precisely partitioned across a split in v1 — both halves
-        // fall back to a flat 1x rather than carry a curve that no longer matches their range.
-        const hasCurve = (clip.speedKeyframes?.length ?? 0) >= 2
-        const speed = hasCurve ? 1 : clip.speed
-        if (clip.reversed) {
-          first = { ...clip, duration: firstDuration, trimIn: splitSource, trimOut: clip.trimOut, speed, speedKeyframes: undefined }
-          second = {
-            ...clip,
-            id: uuid(),
-            start: t,
-            duration: secondDuration,
-            trimIn: clip.trimIn,
-            trimOut: splitSource,
-            speed,
-            speedKeyframes: undefined,
-            transitionIn: undefined
-          }
-        } else {
-          first = { ...clip, duration: firstDuration, trimOut: splitSource, speed, speedKeyframes: undefined }
-          second = {
-            ...clip,
-            id: uuid(),
-            start: t,
-            duration: secondDuration,
-            trimIn: splitSource,
-            speed,
-            speedKeyframes: undefined,
-            transitionIn: undefined
-          }
-        }
+        const halves = splitMediaClipHalves(clip, firstDuration)
+        first = halves.first
+        second = halves.second
       } else {
         first = { ...clip, duration: firstDuration }
         second = { ...clip, id: uuid(), start: t, duration: secondDuration, transitionIn: undefined }
@@ -384,6 +402,43 @@ export const useProjectStore = create<ProjectState>((set) => ({
         return repackVideoTrack({ ...tr, clips })
       })
       return { project, dirty: true, selectedClipId: second.id }
+    }),
+
+  insertFreezeFrame: (clipId) =>
+    set((s) => {
+      if (!canInsertFreezeFrame(s.project, s.playhead, clipId)) return {}
+      const found = findClip(s.project, clipId)!
+      const { track, index } = found
+      const clip = found.clip as MediaClip
+      const t = s.playhead
+      const firstDuration = t - clip.start
+
+      const { first, second } = splitMediaClipHalves(clip, firstDuration)
+      const freezeSource = sourceTimeFor(clip, firstDuration)
+      const freeze: MediaClip = {
+        id: uuid(),
+        kind: 'media',
+        trackId: track.id,
+        start: t,
+        duration: 1,
+        assetId: clip.assetId,
+        trimIn: freezeSource,
+        trimOut: freezeSource,
+        volume: clip.volume,
+        muted: true,
+        speed: 1,
+        reversed: false,
+        frozen: true,
+        transform: defaultTransform()
+      }
+
+      const project = updateTrack(s.project, track.id, (tr) => {
+        const clips = [...tr.clips]
+        clips[index] = first
+        clips.splice(index + 1, 0, freeze, second)
+        return repackVideoTrack({ ...tr, clips })
+      })
+      return { project, dirty: true, selectedClipId: freeze.id }
     }),
 
   mergeWithNext: (clipId) =>

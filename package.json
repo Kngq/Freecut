@@ -11,6 +11,7 @@
     "test:export": "tsx scripts/testExport.ts",
     "test:export:speed": "tsx scripts/testExportSpeed.ts",
     "test:export:reverse": "tsx scripts/testExportReverse.ts",
+    "test:export:freeze": "tsx scripts/testExportFreeze.ts",
     "test": "vitest run"
   },
   "dependencies": {

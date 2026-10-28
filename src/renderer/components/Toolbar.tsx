@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useProjectStore } from '../state/projectStore'
+import { canInsertFreezeFrame, useProjectStore } from '../state/projectStore'
 import { useRecentsStore } from '../state/recentsStore'
 import type { ExportProgress } from '@shared/ipc'
 
@@ -11,6 +11,7 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
   const setIsPlaying = useProjectStore((s) => s.setIsPlaying)
   const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
+  const insertFreezeFrame = useProjectStore((s) => s.insertFreezeFrame)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const addTextClipToTrack = useProjectStore((s) => s.addTextClipToTrack)
   const playhead = useProjectStore((s) => s.playhead)
@@ -89,6 +90,13 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
       <button onClick={() => setPlayhead(0)}>⏮</button>
       <button onClick={splitClipAtPlayhead} disabled={!selectedClipId}>
         Split
+      </button>
+      <button
+        onClick={() => selectedClipId && insertFreezeFrame(selectedClipId)}
+        disabled={!canInsertFreezeFrame(project, playhead, selectedClipId)}
+        title="Insert a 1s frozen hold at the playhead"
+      >
+        Freeze frame
       </button>
       <button onClick={addText}>+ Text</button>
       <span className="spacer" />
