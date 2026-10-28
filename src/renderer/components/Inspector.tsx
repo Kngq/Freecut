@@ -1,9 +1,10 @@
-import { useProjectStore } from '../state/projectStore'
+import { canMergeWithNext, useProjectStore } from '../state/projectStore'
 
 export default function Inspector() {
   const project = useProjectStore((s) => s.project)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const removeClip = useProjectStore((s) => s.removeClip)
+  const mergeWithNext = useProjectStore((s) => s.mergeWithNext)
   const setTransition = useProjectStore((s) => s.setTransition)
   const updateTextClip = useProjectStore((s) => s.updateTextClip)
   const updateMediaClipProps = useProjectStore((s) => s.updateMediaClipProps)
@@ -29,6 +30,7 @@ export default function Inspector() {
   const { track, clip, index } = found
   const firstVideoTrack = project.tracks.find((t) => t.type === 'video')
   const canHaveTransition = track.type === 'video' && track.id === firstVideoTrack?.id && index > 0
+  const canMerge = clip.kind === 'media' && canMergeWithNext(project, clip.id)
 
   return (
     <div className="panel inspector">
@@ -122,6 +124,12 @@ export default function Inspector() {
             onChange={(e) => setTransition(clip.id, Number(e.target.value))}
           />
         </div>
+      )}
+
+      {canMerge && (
+        <button onClick={() => mergeWithNext(clip.id)} style={{ width: '100%', marginTop: 12 }} title="Rejoin with the next clip (undoes a Split)">
+          Merge with next clip
+        </button>
       )}
 
       <button onClick={() => removeClip(clip.id)} style={{ width: '100%', marginTop: 12 }}>

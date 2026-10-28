@@ -41,6 +41,9 @@ interface ProjectState {
 
   trimClip: (clipId: string, edge: 'start' | 'end', newTime: number) => void
   splitClipAtPlayhead: () => void
+  /** Rejoins a clip with its immediate next sibling on the same video track — the inverse of
+   *  Split. Only valid when canMergeWithNext() agrees; a no-op otherwise. */
+  mergeWithNext: (clipId: string) => void
   removeClip: (clipId: string) => void
   setTransition: (clipId: string, duration: number) => void
   updateTextClip: (clipId: string, patch: Record<string, unknown>) => void
@@ -58,6 +61,22 @@ function findClip(project: Project, clipId: string): { track: Track; clip: Clip;
     if (index !== -1) return { track, clip: track.clips[index], index }
   }
   return null
+}
+
+/** Whether `clipId` can be rejoined with its immediate next sibling on the same video track:
+ *  both must be plain (non-frozen, non-curve-speed) media clips from the same asset, sharing
+ *  speed/reversed, and trim-contiguous (the next clip's trimIn picks up exactly where this
+ *  clip's trimOut leaves off — true right after a Split, and whenever neither side has been
+ *  retrimmed since). Exported for the Inspector to decide whether to show the merge button. */
+export function canMergeWithNext(project: Project, clipId: string): boolean {
+  const found = findClip(project, clipId)
+  if (!found || found.track.type !== 'video') return false
+  const { track, clip, index } = found
+  if (clip.kind !== 'media' || clip.frozen || (clip.speedKeyframes?.length ?? 0) >= 2) return false
+  const next = track.clips[index + 1]
+  if (!next || next.kind !== 'media' || next.frozen || (next.speedKeyframes?.length ?? 0) >= 2) return false
+  if (next.assetId !== clip.assetId || next.speed !== clip.speed || next.reversed !== clip.reversed) return false
+  return Math.abs(next.trimIn - clip.trimOut) <= 1e-6
 }
 
 function touch(project: Project): Project {
@@ -359,6 +378,21 @@ export const useProjectStore = create<ProjectState>((set) => ({
         return repackVideoTrack({ ...tr, clips })
       })
       return { project, dirty: true, selectedClipId: second.id }
+    }),
+
+  mergeWithNext: (clipId) =>
+    set((s) => {
+      if (!canMergeWithNext(s.project, clipId)) return {}
+      const found = findClip(s.project, clipId)!
+      const { track, clip, index } = found
+      const next = track.clips[index + 1] as MediaClip
+      const merged: MediaClip = { ...(clip as MediaClip), trimOut: next.trimOut }
+      const project = updateTrack(s.project, track.id, (t) => {
+        const clips = [...t.clips]
+        clips.splice(index, 2, merged)
+        return repackVideoTrack({ ...t, clips })
+      })
+      return { project, dirty: true, selectedClipId: merged.id }
     }),
 
   removeClip: (clipId) =>
