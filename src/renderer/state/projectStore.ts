@@ -7,6 +7,7 @@ import {
   projectDuration,
   sourceTimeFor,
   type Clip,
+  type ClipTransform,
   type MediaAsset,
   type MediaClip,
   type Project,
@@ -50,6 +51,9 @@ interface ProjectState {
    *  to the clip's flat `speed`). Points are sorted, and clamped to [trimIn,trimOut]/[0.1,4]. */
   setClipSpeedKeyframes: (clipId: string, keyframes: SpeedKeyframe[] | undefined) => void
   setClipReversed: (clipId: string, reversed: boolean) => void
+  /** Replaces a clip's transform (position/scale/opacity, optionally keyframed). Works for
+   *  both media and text clips since `transform` lives on ClipBase. */
+  setClipTransform: (clipId: string, transform: ClipTransform) => void
   /** Rejoins a clip with its immediate next sibling on the same video track — the inverse of
    *  Split. Only valid when canMergeWithNext() agrees; a no-op otherwise. */
   mergeWithNext: (clipId: string) => void
@@ -517,6 +521,17 @@ export const useProjectStore = create<ProjectState>((set) => ({
       if (!found || found.clip.kind !== 'media') return {}
       const project = updateTrack(s.project, found.track.id, (t) => {
         const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, reversed } : c)) }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true }
+    }),
+
+  setClipTransform: (clipId, transform) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = { ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, transform } : c)) }
         return repackVideoTrack(withPatch)
       })
       return { project, dirty: true }

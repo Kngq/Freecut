@@ -42,7 +42,7 @@ project.canvas = { width: 480, height: 854, fps: 30 }
 
 const assetA: MediaAsset = { id: 'a', path: clipA, kind: 'video', name: 'clipA.mp4', duration: 3, width: 480, height: 854, hasAudio: true }
 const assetB: MediaAsset = { id: 'b', path: clipB, kind: 'video', name: 'clipB.mp4', duration: 3, width: 480, height: 854, hasAudio: true }
-const assetLogo: MediaAsset = { id: 'logo', path: logo, kind: 'image', name: 'logo.png', duration: 0, hasAudio: false }
+const assetLogo: MediaAsset = { id: 'logo', path: logo, kind: 'image', name: 'logo.png', duration: 0, width: 200, height: 200, hasAudio: false }
 const assetMusic: MediaAsset = { id: 'music', path: music, kind: 'audio', name: 'music.wav', duration: 4, hasAudio: true }
 project.assets = [assetA, assetB, assetLogo, assetMusic]
 
@@ -105,4 +105,29 @@ console.log(probe.stderr)
 
 const stat = fs.statSync(outputPath)
 console.log(`\nOutput written: ${outputPath} (${(stat.size / 1024).toFixed(1)} KB)`)
+
+// ---- Verify the overlay-track logo composites at its native-fit size, not stretched to fill
+// ---- the canvas. The 200x200 logo on this 480x854 canvas fits to 480x480, centered, so it
+// ---- spans y=187..667 — a pixel within that band should be the logo's red, a pixel near the
+// ---- top (well outside it) should still be clip1's own content. Sampled via a real decode +
+// ---- 1x1 crop, not inferred from the filter string, since a plausible-looking filter graph
+// ---- can still composite wrong (this exact check caught a real overlay alpha-blending bug
+// ---- during development — see the format=auto comment in ffmpegGraph.ts).
+function samplePixel(file: string, x: number, y: number, atSeconds: number): [number, number, number] {
+  const png = path.join(WORKDIR, `sample-${x}-${y}-${atSeconds}.png`)
+  const res = spawnSync(ffmpegPath as string, ['-y', '-i', file, '-ss', String(atSeconds), '-update', '1', '-frames:v', '1', png], { encoding: 'utf-8' })
+  if (res.status !== 0) throw new Error(`frame extraction failed: ${res.stderr}`)
+  const raw = spawnSync(ffmpegPath as string, ['-y', '-i', png, '-vf', `crop=1:1:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'])
+  if (raw.status !== 0 || !raw.stdout) throw new Error(`pixel sample failed: ${raw.stderr?.toString()}`)
+  return [raw.stdout[0], raw.stdout[1], raw.stdout[2]]
+}
+
+const isRed = (rgb: [number, number, number]) => rgb[0] > 180 && rgb[1] < 80 && rgb[2] < 80
+const withinLogo = samplePixel(outputPath, 280, 400, 1.5) // inside the clip1 blue bar + inside the logo's native-fit band
+const aboveLogo = samplePixel(outputPath, 280, 20, 1.5) // same x, well above the logo's y=187..667 band
+
+console.log(`\nlogo overlay pixel check: within band ${withinLogo} (expect red), above band ${aboveLogo} (expect NOT red)`)
+if (!isRed(withinLogo)) throw new Error(`expected red logo pixel at (280,400) during its visible window, got ${withinLogo}`)
+if (isRed(aboveLogo)) throw new Error(`expected clip1's own content (not the logo) at (280,20) — overlay is stretching to fill the canvas again`)
+
 console.log('PASS')
