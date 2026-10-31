@@ -210,6 +210,22 @@ const IconRotate = (
     <path d="M4 20v-4h4" />
   </Icon>
 )
+const IconAddVideo = (
+  <Icon>
+    <rect x="3" y="6" width="12" height="12" rx="2" />
+    <path d="M19 9v6" />
+    <path d="M16 12h6" />
+  </Icon>
+)
+const IconAddAudio = (
+  <Icon>
+    <path d="M4 10v4" />
+    <path d="M8 7v10" />
+    <path d="M12 9v6" />
+    <path d="M19 9v6" />
+    <path d="M16 12h6" />
+  </Icon>
+)
 
 interface ToolButtonProps {
   icon: React.ReactNode
@@ -254,6 +270,7 @@ export default function Timeline() {
   const setZoom = useProjectStore((s) => s.setZoom)
   const addAsset = useProjectStore((s) => s.addAsset)
   const addMediaClipToTrack = useProjectStore((s) => s.addMediaClipToTrack)
+  const addTrack = useProjectStore((s) => s.addTrack)
   const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
   const removeClip = useProjectStore((s) => s.removeClip)
   const rotateClip = useProjectStore((s) => s.rotateClip)
@@ -596,6 +613,9 @@ export default function Timeline() {
           <span className="tl-sep" />
           <ToolButton icon={IconMirror} label="Mirror" shortcut="⌘M" disabled={!selectedClipId} onClick={() => selectedClipId && toggleClipFlipH(selectedClipId)} />
           <ToolButton icon={IconRotate} label="Flip" shortcut="⌘⇧F" disabled={!selectedClipId} onClick={() => selectedClipId && rotateClip(selectedClipId, 90)} />
+          <span className="tl-sep" />
+          <ToolButton icon={IconAddVideo} label="Add video track" onClick={() => addTrack('video')} />
+          <ToolButton icon={IconAddAudio} label="Add audio track" onClick={() => addTrack('audio')} />
         </div>
         <span className="tl-spacer" />
         <span style={{ color: 'var(--text-dim)' }}>Zoom</span>
