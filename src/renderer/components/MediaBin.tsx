@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { canHaveTransition, useProjectStore } from '../state/projectStore'
+import { EffectPreview, TransitionPreview } from './EffectPreview'
 import {
   EFFECT_CATALOG,
   TRANSITION_CATALOG,
@@ -322,67 +323,72 @@ export default function MediaBin() {
       )}
       {activeTab === 'effects' && (
         <div className="media-bin-body">
-          {!selectedClip || selectedClip.kind !== 'media' ? (
-            <div className="empty-hint">Select a video or image clip on the timeline to apply an effect.</div>
-          ) : (
+          <div className="empty-hint" style={{ padding: '0 0 8px' }}>
+            {selectedClip && selectedClip.kind === 'media'
+              ? 'Click an effect to add it to the selected clip. Previews are live.'
+              : 'Preview effects below. Select a video/image clip to apply one.'}
+          </div>
+          <div className="fx-grid">
+            {EFFECT_CATALOG.map((entry) => {
+              const applicable = selectedClip?.kind === 'media'
+              return (
+                <button
+                  key={entry.type}
+                  className={`fx-card ${applicable ? '' : 'fx-card-disabled'}`}
+                  onClick={() => applicable && handleApplyEffect(entry.type)}
+                  title={applicable ? `Add "${entry.label}"` : `Preview of "${entry.label}" (select a clip to apply)`}
+                >
+                  <EffectPreview type={entry.type} />
+                  <span className="fx-card-label">{entry.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {selectedClip?.kind === 'media' && selectedClip.effects && selectedClip.effects.length > 0 && (
             <>
-              <div className="empty-hint" style={{ padding: '0 0 8px' }}>Click an effect to add it to the selected clip.</div>
-              <div className="fx-grid">
-                {EFFECT_CATALOG.map((entry) => (
-                  <button key={entry.type} className="fx-card" onClick={() => handleApplyEffect(entry.type)} title={`Add "${entry.label}"`}>
-                    <span className="fx-card-label">{entry.label}</span>
+              <h3 style={{ marginTop: 14 }}>Applied</h3>
+              {selectedClip.effects.map((fx) => (
+                <div className="fx-applied-row" key={fx.id}>
+                  <span>{effectCatalogEntry(fx.type)?.label ?? fx.type}</span>
+                  <button title="Remove effect" onClick={() => selectedClipId && removeClipEffect(selectedClipId, fx.id)}>
+                    ×
                   </button>
-                ))}
-              </div>
-              {selectedClip.effects && selectedClip.effects.length > 0 && (
-                <>
-                  <h3 style={{ marginTop: 14 }}>Applied</h3>
-                  {selectedClip.effects.map((fx) => (
-                    <div className="fx-applied-row" key={fx.id}>
-                      <span>{effectCatalogEntry(fx.type)?.label ?? fx.type}</span>
-                      <button title="Remove effect" onClick={() => selectedClipId && removeClipEffect(selectedClipId, fx.id)}>
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  <div className="empty-hint" style={{ padding: '6px 0 0' }}>Fine-tune parameters in the Inspector.</div>
-                </>
-              )}
+                </div>
+              ))}
+              <div className="empty-hint" style={{ padding: '6px 0 0' }}>Fine-tune parameters in the Inspector.</div>
             </>
           )}
         </div>
       )}
       {activeTab === 'transitions' && (
         <div className="media-bin-body">
-          {!canHaveTransition(project, selectedClipId) ? (
-            <div className="empty-hint">
-              Select a clip on the main video track (not the first clip) to add a transition into it from the previous clip.
+          <div className="empty-hint" style={{ padding: '0 0 8px' }}>
+            {canHaveTransition(project, selectedClipId)
+              ? 'Click a transition to apply it to the selected clip. Previews loop A→B.'
+              : 'Preview transitions below. Select a clip on the main video track (not the first) to apply one.'}
+          </div>
+          <div className="fx-grid">
+            {TRANSITION_CATALOG.map((t) => {
+              const applicable = canHaveTransition(project, selectedClipId)
+              const active = selectedClip?.transitionIn?.type === t.type && (selectedClip?.transitionIn?.duration ?? 0) > 0
+              return (
+                <button
+                  key={t.type}
+                  className={`fx-card ${active ? 'active' : ''} ${applicable ? '' : 'fx-card-disabled'}`}
+                  onClick={() => applicable && handleApplyTransition(t.type)}
+                  title={applicable ? `Apply "${t.label}"` : `Preview of "${t.label}" (select an eligible clip to apply)`}
+                >
+                  <TransitionPreview type={t.type} />
+                  <span className="fx-card-label">{t.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {selectedClip?.transitionIn && selectedClip.transitionIn.duration > 0 && (
+            <div className="empty-hint" style={{ padding: '10px 0 0' }}>
+              Current: {TRANSITION_CATALOG.find((t) => t.type === selectedClip!.transitionIn!.type)?.label} ·{' '}
+              {selectedClip.transitionIn.duration.toFixed(2)}s — adjust duration in the Inspector.
             </div>
-          ) : (
-            <>
-              <div className="empty-hint" style={{ padding: '0 0 8px' }}>Click a transition to apply it to the selected clip.</div>
-              <div className="fx-grid">
-                {TRANSITION_CATALOG.map((t) => {
-                  const active = selectedClip?.transitionIn?.type === t.type && (selectedClip?.transitionIn?.duration ?? 0) > 0
-                  return (
-                    <button
-                      key={t.type}
-                      className={`fx-card ${active ? 'active' : ''}`}
-                      onClick={() => handleApplyTransition(t.type)}
-                      title={`Apply "${t.label}"`}
-                    >
-                      <span className="fx-card-label">{t.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              {selectedClip?.transitionIn && selectedClip.transitionIn.duration > 0 && (
-                <div className="empty-hint" style={{ padding: '10px 0 0' }}>
-                  Current: {TRANSITION_CATALOG.find((t) => t.type === selectedClip!.transitionIn!.type)?.label} ·{' '}
-                  {selectedClip.transitionIn.duration.toFixed(2)}s — adjust duration in the Inspector.
-                </div>
-              )}
-            </>
           )}
         </div>
       )}

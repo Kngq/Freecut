@@ -744,25 +744,45 @@ canvas.preview-canvas {
 
 .fx-card {
   display: flex;
-  align-items: flex-end;
-  aspect-ratio: 16 / 10;
-  padding: 8px;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: linear-gradient(135deg, var(--bg-2) 0%, var(--bg-3) 100%);
+  background: var(--bg-2);
   color: var(--text);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
 }
 
 .fx-card:hover {
   border-color: var(--accent);
-  background: linear-gradient(135deg, var(--bg-3) 0%, #45455a 100%);
+  background: var(--bg-3);
 }
 
 .fx-card.active {
   border-color: var(--accent);
   outline: 1px solid var(--accent);
+}
+
+.fx-card-disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.fx-card-disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-2);
+}
+
+.fx-preview-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 4px;
+  background: #000;
 }
 
 .fx-card-label {
