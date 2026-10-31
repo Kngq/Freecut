@@ -3,12 +3,13 @@ import path from 'node:path'
 // @ts-expect-error - no types published
 import ffprobePkg from 'ffprobe-static'
 import type { ProbeResult } from '@shared/ipc'
+import { SUPPORTED_EXTENSIONS } from '@shared/types'
 
 const ffprobePath: string = (ffprobePkg as { path: string }).path
 
-const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi'])
-const AUDIO_EXT = new Set(['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'])
-const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
+const VIDEO_EXT = new Set<string>(SUPPORTED_EXTENSIONS.video)
+const AUDIO_EXT = new Set<string>(SUPPORTED_EXTENSIONS.audio)
+const IMAGE_EXT = new Set<string>(SUPPORTED_EXTENSIONS.image)
 
 export function probeMedia(filePath: string): Promise<ProbeResult | null> {
   const ext = path.extname(filePath).toLowerCase()

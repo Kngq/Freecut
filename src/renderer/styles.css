@@ -984,3 +984,61 @@ canvas.preview-canvas {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* Transient notification stack (import errors etc.), bottom-center, non-modal. */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: 560px;
+  width: max-content;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #1b1f27;
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  pointer-events: auto;
+}
+
+.toast-error {
+  border-color: #b4474a;
+  background: #2a1b1d;
+}
+
+.toast-message {
+  flex: 1;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.toast-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}

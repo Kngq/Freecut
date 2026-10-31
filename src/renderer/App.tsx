@@ -6,8 +6,11 @@ import Timeline from './components/Timeline'
 import Inspector from './components/Inspector'
 import Home from './components/Home'
 import ResizeHandle from './components/ResizeHandle'
+import Toasts from './components/Toasts'
 import { useProjectStore } from './state/projectStore'
 import { useLayoutStore } from './state/layoutStore'
+import { useToastStore } from './state/toastStore'
+import { setImportErrorHandler } from './media'
 
 export default function App() {
   const [view, setView] = useState<'home' | 'editor'>('home')
@@ -26,6 +29,12 @@ export default function App() {
   const toggleClipFlipH = useProjectStore((s) => s.toggleClipFlipH)
   const rotateClip = useProjectStore((s) => s.rotateClip)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
+
+  // Route media-import rejections through the on-screen toast stack (explanatory, non-blocking)
+  // instead of a bare alert().
+  useEffect(() => {
+    setImportErrorHandler((message) => useToastStore.getState().push('error', message))
+  }, [])
 
   useEffect(() => {
     if (view !== 'editor') return
@@ -82,6 +91,7 @@ export default function App() {
       </div>
       <ResizeHandle orientation="horizontal" value={timelineHeight} onChange={setTimelineHeight} invert />
       <Timeline />
+      <Toasts />
     </div>
   )
 }

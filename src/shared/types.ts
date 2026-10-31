@@ -443,6 +443,29 @@ export interface Project {
 
 export const FILE_EXTENSION = '.fcproj'
 
+/** Media file extensions freecut can import, by kind. The single source of truth shared by the
+ *  main-process probe (what ffprobe is asked to read) and the renderer's import error messaging
+ *  (so a rejection can say exactly which formats ARE supported). */
+export const SUPPORTED_EXTENSIONS = {
+  video: ['.mp4', '.mov', '.mkv', '.webm', '.avi'],
+  audio: ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'],
+  image: ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+} as const
+
+/** All supported extensions flattened, for a quick membership check. */
+export const ALL_SUPPORTED_EXTENSIONS: string[] = [
+  ...SUPPORTED_EXTENSIONS.video,
+  ...SUPPORTED_EXTENSIONS.audio,
+  ...SUPPORTED_EXTENSIONS.image
+]
+
+/** Lowercase extension (with leading dot) of a path, or '' if none. */
+export function fileExtension(filePath: string): string {
+  const base = filePath.split(/[/\\]/).pop() ?? filePath
+  const dot = base.lastIndexOf('.')
+  return dot >= 0 ? base.slice(dot).toLowerCase() : ''
+}
+
 export function projectDuration(project: Project): number {
   let max = 0
   for (const track of project.tracks) {

@@ -1,4 +1,5 @@
 import type { MediaAsset } from '@shared/types'
+import { ALL_SUPPORTED_EXTENSIONS, SUPPORTED_EXTENSIONS, fileExtension } from '@shared/types'
 
 /** MIME type used when dragging an already-imported asset from the media bin. */
 export const ASSET_DRAG_MIME = 'application/x-freecut-asset'
@@ -7,14 +8,46 @@ function basename(p: string): string {
   return p.split(/[/\\]/).pop() ?? p
 }
 
-/** Probes each path and returns the assets that could be read. Unreadable files are reported once. */
-export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
+/** Human-readable list of supported formats, for import error messages. */
+function supportedFormatsSentence(): string {
+  const strip = (exts: readonly string[]) => exts.map((e) => e.slice(1)).join(', ')
+  return (
+    `Video: ${strip(SUPPORTED_EXTENSIONS.video)}\n` +
+    `Audio: ${strip(SUPPORTED_EXTENSIONS.audio)}\n` +
+    `Images: ${strip(SUPPORTED_EXTENSIONS.image)}`
+  )
+}
+
+/** Result of an import attempt: the assets that loaded, plus any files that were rejected with
+ *  a specific, human-readable reason (surfaced to the user instead of a silent drop). */
+export interface ImportResult {
+  assets: MediaAsset[]
+  rejected: { name: string; reason: string }[]
+}
+
+/** Probes each path and returns the assets that could be read, plus explained rejections. */
+export async function importAssets(paths: string[]): Promise<ImportResult> {
   const assets: MediaAsset[] = []
-  const skipped: string[] = []
+  const rejected: { name: string; reason: string }[] = []
   for (const path of paths) {
+    const ext = fileExtension(path)
+    // Classify BEFORE probing so an unsupported container gets a precise message rather than a
+    // generic "couldn't read" (the probe returns null for both cases otherwise).
+    if (!ALL_SUPPORTED_EXTENSIONS.includes(ext)) {
+      rejected.push({
+        name: basename(path),
+        reason: ext
+          ? `"${ext}" files aren't supported.`
+          : `files without a recognized extension aren't supported.`
+      })
+      continue
+    }
     const probe = await window.api.probeMedia(path)
     if (!probe) {
-      skipped.push(basename(path))
+      rejected.push({
+        name: basename(path),
+        reason: `the file couldn't be read (it may be corrupt or use an unsupported codec).`
+      })
       continue
     }
     // Some codecs (ProRes, DNxHD, ...) demux fine in Chromium but never actually decode a
@@ -50,8 +83,28 @@ export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
       waveform: waveform ?? undefined
     })
   }
-  if (skipped.length > 0) alert(`Could not import:\n${skipped.join('\n')}`)
+  return { assets, rejected }
+}
+
+/** Back-compat convenience: import and surface any rejections via the toast channel, returning
+ *  just the successful assets. Callers that want to show the reasons inline use importAssets. */
+export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
+  const { assets, rejected } = await importAssets(paths)
+  if (rejected.length > 0) {
+    const lines = rejected.map((r) => `• ${r.name} — ${r.reason}`).join('\n')
+    notifyImportError(`Couldn't import ${rejected.length} file${rejected.length > 1 ? 's' : ''}:\n${lines}\n\nSupported formats:\n${supportedFormatsSentence()}`)
+  }
   return assets
+}
+
+/** Where import errors go. Defaults to a simple alert; the app overrides this at startup to
+ *  route rejections through the on-screen toast/slash popup instead. */
+let importErrorHandler: (message: string) => void = (message) => alert(message)
+export function setImportErrorHandler(handler: (message: string) => void) {
+  importErrorHandler = handler
+}
+function notifyImportError(message: string) {
+  importErrorHandler(message)
 }
 
 /** Absolute paths of OS files in a drop event (empty if none, e.g. an in-app drag). */
