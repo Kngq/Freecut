@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { canMergeWithNext, useProjectStore } from '../state/projectStore'
 import { useLayoutStore } from '../state/layoutStore'
+import BackgroundRemovalButton from './BackgroundRemovalButton'
 import {
   EFFECT_CATALOG,
   FONT_CATALOG,
@@ -373,6 +374,11 @@ export default function Inspector() {
             onRemove={(effectId) => removeClipEffect(clip.id, effectId)}
             onParam={(effectId, key, value) => updateClipEffectParam(clip.id, effectId, key, value)}
           />
+          {track.type === 'video' &&
+            (() => {
+              const asset = project.assets.find((a) => a.id === clip.assetId)
+              return asset ? <BackgroundRemovalButton assetPath={asset.path} /> : null
+            })()}
         </>
       )}
 

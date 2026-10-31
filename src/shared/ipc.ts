@@ -38,6 +38,20 @@ export interface CaptionStatus {
   installHint?: string
 }
 
+/** Whether local background removal can run (ONNX runtime + downloaded matting model). */
+export interface BackgroundStatus {
+  runtimeAvailable: boolean
+  modelDownloaded: boolean
+  modelName: string
+  installHint?: string
+}
+
+export interface BackgroundResult {
+  ok: boolean
+  outputPath?: string
+  error?: string
+}
+
 export interface FreecutApi {
   openMediaDialog(): Promise<string[]>
   probeMedia(path: string): Promise<ProbeResult | null>
@@ -65,6 +79,10 @@ export interface FreecutApi {
   captionStatus(): Promise<CaptionStatus>
   downloadCaptionModel(): Promise<{ ok: boolean; error?: string }>
   transcribeToCaptions(path: string): Promise<{ ok: boolean; segments?: CaptionSegment[]; error?: string }>
+  /** Local background removal (ONNX matting): status, one-time model download, and processing. */
+  backgroundStatus(): Promise<BackgroundStatus>
+  downloadBackgroundModel(): Promise<{ ok: boolean; error?: string }>
+  removeBackground(path: string): Promise<BackgroundResult>
   fileUrl(path: string): string
   /** Absolute path of a File from a drag-and-drop (File.path was removed in Electron 32). */
   getPathForFile(file: File): string

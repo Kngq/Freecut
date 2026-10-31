@@ -7,6 +7,7 @@ import { ensurePreviewProxy } from './proxy'
 import { ensureVideoCover } from './thumbnails'
 import { ensureWaveform } from './waveform'
 import { captionStatus, downloadCaptionModel, transcribeToCaptions } from './transcribe'
+import { backgroundStatus, downloadBackgroundModel, removeBackground } from './background'
 import { exportProject } from './export'
 import { handleMediaRequest } from './mediaProtocol'
 import { FILE_EXTENSION, type Project } from '@shared/types'
@@ -103,6 +104,18 @@ ipcMain.handle('caption:download', async () => {
 
 ipcMain.handle('caption:transcribe', async (_e, filePath: string) => {
   return transcribeToCaptions(filePath)
+})
+
+ipcMain.handle('background:status', async () => {
+  return backgroundStatus()
+})
+
+ipcMain.handle('background:download', async () => {
+  return downloadBackgroundModel()
+})
+
+ipcMain.handle('background:remove', async (_e, filePath: string) => {
+  return removeBackground(filePath)
 })
 
 ipcMain.handle('project:saveDialog', async (_e, defaultName: string) => {

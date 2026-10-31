@@ -24,7 +24,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron/main',
             rollupOptions: {
-              external: ['fluent-ffmpeg', 'ffmpeg-static', 'ffprobe-static']
+              external: ['fluent-ffmpeg', 'ffmpeg-static', 'ffprobe-static', 'onnxruntime-node']
             }
           }
         }
