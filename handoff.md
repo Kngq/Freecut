@@ -1,34 +1,108 @@
-# Handoff — freecut
+# freecut — Project Handoff
 
-## Goal
+This document is the single source of truth for the project's mission, architecture, and state.
+It is written to be self-contained: a new session should be able to start from here with no prior
+context.
 
-freecut is a barebones, from-scratch video editor (Electron + React + TypeScript + Vite) inspired by CapCut's UX, using its own `.fcproj` JSON format. v1 scope: multi-track timeline, trim/split/delete clips, media import, preview playback, text overlays, crossfade transitions on the primary video track, and MP4 export.
+## Mission
 
-## Current state
+freecut is a **from-scratch, local-first video editor** (Electron + React + TypeScript + Vite)
+inspired by CapCut's UX, using its own `.fcproj` JSON project format. The guiding principles:
 
-- Working tree is **clean** on `main`, in sync with `origin/main`. No uncommitted changes.
-- `npx tsc --noEmit` passes with no errors.
-- `npx vitest run` passes: 21/21 tests (`src/shared/types.test.ts`, `src/shared/ffmpegGraph.test.ts`).
-- Last commit (`a62321a`, this session): wired up the Audio and Text tabs in the media bin — tabs are now switchable, Audio tab filters the asset pool and reuses the Media tab's import/drag/double-click flow, Text tab has a "+ Add text" button inserting a clip on the Text track. Verified via the CDP driver per the commit message (synthetic audio asset dragged onto the Audio track, text clip added via the button).
-- Core features already implemented per recent history: trim/split/delete/merge, speed control (constant + piecewise curves), reverse playback, freeze frame, keyframe animation (position/scale/opacity), resizable Media/Preview/Inspector/Timeline panels, crossfade transitions (`src/shared/ffmpegGraph.ts`, primary video track only via `xfade`), proxy transcoding for codecs Chromium can't decode natively, and MP4 export (`electron/main/export.ts`).
+- **Local and offline-first.** Everything runs on the user's machine. The bundled ffmpeg does all
+  media work; optional ML features (captions, background removal) use locally-downloaded models,
+  never a cloud API. No telemetry, no network at edit time (only one-time model downloads).
+- **Faithful to CapCut's feel** — timeline with filmstrip thumbnails + waveforms, a media bin,
+  a preview with transport controls under it, an inspector, effects/transitions, text, and MP4
+  export — but a clean, minimal, understandable codebase.
+- **Correctness shared between preview and export.** The Canvas-2D live preview and the ffmpeg
+  export are driven by the same pure logic (`src/shared/`) so what you see is what you render.
 
-## Files touched this session
+## Tech stack & layout
 
-None. No implementation work has been done in this conversation — this handoff was requested at the very start of the session, before any task was assigned.
+- **Main process** (`electron/main/`): Node APIs, ffmpeg/ffprobe spawning, model download/run,
+  the `freecut-media://` privileged scheme for serving local files to the renderer, all IPC
+  handlers (`index.ts`). Marked external in the main vite build: `ffmpeg-static`, `ffprobe-static`,
+  `onnxruntime-node`.
+- **Preload** (`electron/preload/`): contextBridge `window.api`, thin `ipcRenderer.invoke` wrappers.
+- **Renderer** (`src/renderer/`): React UI. Zustand stores in `src/renderer/state/`.
+- **Shared** (`src/shared/`): isomorphic, unit-tested pure logic — `types.ts` (data model +
+  catalogs + helpers), `ffmpegGraph.ts` (builds the export filter graph), `effects.ts` (effect
+  math used by both preview and export), `ipc.ts` (the `FreecutApi` contract).
 
-## What failed
+### Key files
+- `src/shared/types.ts` — Project/Track/Clip model; `ProjectCanvas` (width/height/fps/colorSpace);
+  catalogs: `EFFECT_CATALOG`, `TRANSITION_CATALOG`, `FONT_CATALOG`, `ASPECT_PRESETS`,
+  `SUPPORTED_EXTENSIONS`; helpers `createEmptyProject`, `formatMMSS`, `fontCatalogEntry`,
+  `aspectPresetFor`, `fileExtension`.
+- `src/renderer/state/projectStore.ts` — the document + transient UI state (selection, playhead,
+  isPlaying, pxPerSecond, previewAssetId) and all mutation actions.
+- `src/renderer/state/layoutStore.ts` — persisted view prefs: panel sizes, `trackHeight`
+  (short/default/tall via `TRACK_HEIGHTS`), `useProxies`.
+- `src/renderer/state/toastStore.ts` — non-modal notification stack (`Toasts.tsx`).
+- `src/renderer/components/` — `Timeline.tsx`, `Preview.tsx`, `Inspector.tsx`, `MediaBin.tsx`,
+  `Toolbar.tsx`, `Home.tsx`, `EffectPreview.tsx`, `CaptionsPanel.tsx`, `BackgroundRemovalButton.tsx`.
+- `electron/main/` — `export.ts`, `proxy.ts`, `probe.ts`, `thumbnails.ts`, `waveform.ts`,
+  `transcribe.ts` (captions), `background.ts` (bg removal), `mediaProtocol.ts`.
 
-Nothing failed. There is no in-progress or broken work to report; the repo was already in a clean, passing state when this handoff was written.
+## Current feature state (all implemented & verified)
 
-## What to do next
+Core (pre-existing): media import, trim/split/delete/merge, speed (constant + curve), reverse,
+freeze frame, keyframe animation, crossfade+more transitions on the primary video track, overlay
+video tracks + multi audio tracks in export, text overlays, MP4 export, resizable panels, proxy
+transcoding for codecs Chromium can't decode, filmstrip thumbnails + waveforms, media grid,
+standalone media preview, MM:SS ruler, aspect-ratio-aware preview.
 
-No task was specified in this conversation, so there's no concrete next step to resume. If picking this up fresh, likely candidates based on the v1 scope and current architecture:
+Recently added (this track of work — all on `main`, pushed to github.com/Kngq/Freecut):
+1. **Font selection for text** — `FONT_CATALOG`; `TextClip.fontFamily`; threaded into the preview
+   `ctx.font` and the ffmpeg `drawtext fontfile=`. Dropdown in the Inspector text editor.
+2. **Auto-captions (local)** — `electron/main/transcribe.ts`: whisper.cpp (`whisper-cli` from PATH/
+   Homebrew) + a once-downloaded GGML model (`ggml-base.en.bin`) in `userData/whisper/`. ffmpeg
+   extracts 16kHz WAV → `whisper-cli -oj` → parsed segments → `addCaptionClips` adds subtitle-style
+   text clips. UI: MediaBin "Captions" tab (`CaptionsPanel.tsx`). Graceful when binary/model absent.
+3. **Top bar cleanup** — removed Split/Freeze/Play/skip; play-pause + skip indicator now lives
+   under the preview (`Preview.tsx` `.preview-controls`). Spacebar still toggles play.
+4. **Preview effects/transitions without a clip** — `EffectPreview.tsx` renders a live looping
+   sample-frame per effect (reusing shared effect math) and a JS approximation per transition,
+   always visible in the MediaBin Effects/Transitions tabs.
+5. **Inspector tabs** — Video / Adjust Speed / Animation for a selected media clip.
+6. **Multiple video/audio tracks** — add-track buttons in the timeline toolbar (model + export
+   already supported overlays; this adds the UI + per-lane drop routing).
+7. **Aspect ratio** — `ASPECT_PRESETS` (portrait/landscape/square/4:3/cinema) + `setCanvasSize`
+   store action + a Toolbar dropdown. Preview + export both read `project.canvas`.
+8. **Background removal (scaffold)** — `electron/main/background.ts`: optional `onnxruntime-node`
+   + a once-downloaded U²-Net ONNX model; ffmpeg frames → per-frame matte → alpha → ProRes 4444.
+   UI: "Background removal (beta)" in the Inspector Video tab. Graceful when runtime/model absent.
+9. **Explanatory import errors** — unsupported/unreadable files now surface a specific reason
+   (which type, or "couldn't be read") via a non-modal toast, listing supported formats.
+10. **Track height modes** — CapCut-style short/default/tall selector in the timeline toolbar
+    (`layoutStore.trackHeight`, persisted). Short = name bar only; tall = taller + thicker borders.
+11. **Ruler lines** — the timeline scale is now classic major/minor tick lines (not boxes).
+12. **Inspector project details** — when nothing is selected, the Inspector shows project name,
+    file path, aspect ratio, resolution, frame rate, color space, duration, track/media counts,
+    and proxy status.
+13. **Proxy option** — a "Use preview proxies" toggle (Inspector project view, `layoutStore`)
+    gates proxy generation on import.
 
-- Confirm whether MP4 export has a UI entry point beyond what's wired in `Toolbar.tsx`/`Home.tsx` — worth an end-to-end export smoke test (import → trim → export → verify output file).
-- `ffmpegGraph.ts` only supports crossfade transitions on the *first* video track; later video tracks are overlay-only by design (see memory `freecut-project-scope`) — confirm this limitation is still acceptable or surface it in the UI.
-- Check in with the user on what the next feature/fix target actually is before starting work.
+## Build / verify commands
+- `npx tsc -p tsconfig.json --noEmit` — typecheck (passes clean).
+- `npx vitest run` / `npm test` — unit tests (63 passing: shared types, ffmpegGraph, effects, store).
+- `npx vite build` — builds renderer + main + preload bundles (all pass).
+- Agent-driven UI verification: the CDP driver at `scripts/devDriver.mjs` (see
+  `.claude/skills/run-freecut/SKILL.md`) — `launch`, `eval`, `screenshot`, `quit`. Screenshots in
+  `.dev-shots/` (gitignored).
 
-## Environment notes
+## Known limitations / good next steps
+- **Captions** require `brew install whisper-cpp` (binary not bundled); once installed, the model
+  downloads on first use. Consider bundling `@remotion/install-whisper-cpp` to auto-fetch the binary.
+- **Background removal** requires `npm i onnxruntime-node` (optional, prebuilt arm64). The pipeline
+  is per-frame (temporal flicker possible) and outputs a ProRes 4444 `.mov` path — the
+  import-as-overlay wiring (swap the clip to the matted result) is still a TODO.
+- **Overlay video tracks** are contiguous per-track rolls (clips butt from 0); free positioning of
+  an overlay clip at an arbitrary start isn't exposed yet (export already honors `clip.start`).
+- **fontfile** paths in export are macOS system-font paths; a cross-platform font resolver (or
+  bundled fonts) would make export font selection portable.
 
-- `extract-zip`/`yauzl` can silently truncate `npm install`'s Electron download in this shell — if `node_modules/electron/dist` looks tiny, re-extract the cached zip with system `unzip`/`ditto` instead of blindly reinstalling. See memory `freecut-env-quirks` for the full recipe (including an Electron version-revocation gotcha).
-- This Bash tool's shell has no usable WindowServer connection — GUI launches of the Electron app must be verified by the user directly or via a screenshot/computer-use tool, not assumed to work from a headless `npm run dev`.
+## Git
+- Remote: `https://github.com/Kngq/Freecut.git` (origin). Branch `main`.
+- Working tree should be committed & pushed after each feature chunk.
