@@ -429,6 +429,9 @@ export interface ProjectCanvas {
   width: number
   height: number
   fps: number
+  /** Working color space label (informational; export is standard Rec.709/sRGB). Optional so
+   *  old .fcproj files round-trip. */
+  colorSpace?: string
 }
 
 export interface Project {

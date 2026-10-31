@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { canMergeWithNext, useProjectStore } from '../state/projectStore'
 import {
   EFFECT_CATALOG,
   FONT_CATALOG,
   TRANSITION_CATALOG,
+  aspectPresetFor,
   effectCatalogEntry,
+  projectDuration,
   type ClipEffect,
   type ClipEffectType,
   type ClipTransform,
@@ -208,7 +211,9 @@ function EffectFields({
 
 export default function Inspector() {
   const project = useProjectStore((s) => s.project)
+  const filePath = useProjectStore((s) => s.filePath)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
+  const [tab, setTab] = useState<'video' | 'speed' | 'animation'>('video')
   const removeClip = useProjectStore((s) => s.removeClip)
   const mergeWithNext = useProjectStore((s) => s.mergeWithNext)
   const setTransition = useProjectStore((s) => s.setTransition)
@@ -233,10 +238,29 @@ export default function Inspector() {
   }
 
   if (!found) {
+    const { width, height, fps, colorSpace } = project.canvas
+    const preset = aspectPresetFor(width, height)
+    const aspectLabel = preset ? preset.label : `${width}:${height} (custom)`
+    const proxied = project.assets.filter((a) => a.previewPath).length
+    const totalDur = projectDuration(project)
+    const mm = String(Math.floor(totalDur / 60)).padStart(2, '0')
+    const ss = String(Math.round(totalDur % 60)).padStart(2, '0')
     return (
       <div className="panel inspector">
-        <h3>Inspector</h3>
-        <div className="empty-hint">Select a clip to edit its properties.</div>
+        <h3>Project</h3>
+        <dl className="detail-list">
+          <div className="detail-row"><dt>Name</dt><dd>{project.name}</dd></div>
+          <div className="detail-row"><dt>File path</dt><dd className="detail-path" title={filePath ?? 'Unsaved'}>{filePath ?? 'Unsaved'}</dd></div>
+          <div className="detail-row"><dt>Aspect ratio</dt><dd>{aspectLabel}</dd></div>
+          <div className="detail-row"><dt>Resolution</dt><dd>{width} × {height}</dd></div>
+          <div className="detail-row"><dt>Frame rate</dt><dd>{fps} fps</dd></div>
+          <div className="detail-row"><dt>Color space</dt><dd>{colorSpace ?? 'Rec. 709 / sRGB'}</dd></div>
+          <div className="detail-row"><dt>Duration</dt><dd>{mm}:{ss}</dd></div>
+          <div className="detail-row"><dt>Tracks</dt><dd>{project.tracks.length}</dd></div>
+          <div className="detail-row"><dt>Media</dt><dd>{project.assets.length} asset{project.assets.length === 1 ? '' : 's'}</dd></div>
+          <div className="detail-row"><dt>Proxy</dt><dd>{proxied > 0 ? `${proxied} proxied for preview` : 'None'}</dd></div>
+        </dl>
+        <div className="empty-hint" style={{ marginTop: 12 }}>Select a clip to edit its properties.</div>
       </div>
     )
   }
@@ -245,6 +269,12 @@ export default function Inspector() {
   const firstVideoTrack = project.tracks.find((t) => t.type === 'video')
   const canHaveTransition = track.type === 'video' && track.id === firstVideoTrack?.id && index > 0
   const canMerge = clip.kind === 'media' && canMergeWithNext(project, clip.id)
+  // Tabs only apply to media clips ON A VIDEO TRACK (they have speed + animation to adjust).
+  // Audio clips show their single volume/mute editor; text clips show the text editor.
+  const showTabs = clip.kind === 'media' && track.type === 'video'
+  const showVideoTab = !showTabs || tab === 'video'
+  const showSpeedTab = showTabs && tab === 'speed'
+  const showAnimationTab = showTabs && tab === 'animation'
 
   return (
     <div className="panel inspector">
@@ -256,6 +286,14 @@ export default function Inspector() {
           {clip.start.toFixed(2)}s · {clip.duration.toFixed(2)}s
         </div>
       </div>
+
+      {showTabs && (
+        <div className="inspector-tabs">
+          <button className={`inspector-tab ${tab === 'video' ? 'active' : ''}`} onClick={() => setTab('video')}>Video</button>
+          <button className={`inspector-tab ${tab === 'speed' ? 'active' : ''}`} onClick={() => setTab('speed')}>Adjust Speed</button>
+          <button className={`inspector-tab ${tab === 'animation' ? 'active' : ''}`} onClick={() => setTab('animation')}>Animation</button>
+        </div>
+      )}
 
       {clip.kind === 'text' && (
         <>
@@ -298,7 +336,7 @@ export default function Inspector() {
         </>
       )}
 
-      {clip.kind === 'media' && (
+      {clip.kind === 'media' && showVideoTab && (
         <>
           <div className="field-row">
             <label>Volume ({Math.round(clip.volume * 100)}%)</label>
@@ -325,7 +363,7 @@ export default function Inspector() {
         </>
       )}
 
-      {track.type === 'video' && clip.kind === 'media' && (() => {
+      {track.type === 'video' && clip.kind === 'media' && showSpeedTab && (() => {
         const hasCurve = (clip.speedKeyframes?.length ?? 0) >= 2
         const curve = clip.speedKeyframes ?? []
 
@@ -430,13 +468,15 @@ export default function Inspector() {
                 Reversed
               </label>
             </div>
-
-            <TransformFields transform={clip.transform} duration={clip.duration} onChange={(t) => setClipTransform(clip.id, t)} />
           </>
         )
       })()}
 
-      {canHaveTransition && (
+      {clip.kind === 'media' && showAnimationTab && (
+        <TransformFields transform={clip.transform} duration={clip.duration} onChange={(t) => setClipTransform(clip.id, t)} />
+      )}
+
+      {canHaveTransition && showVideoTab && (
         <>
           <div className="field-row">
             <label>Transition in ({(clip.transitionIn?.duration ?? 0).toFixed(2)}s)</label>
