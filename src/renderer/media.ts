@@ -1,5 +1,6 @@
 import type { MediaAsset } from '@shared/types'
 import { ALL_SUPPORTED_EXTENSIONS, SUPPORTED_EXTENSIONS, fileExtension } from '@shared/types'
+import { useLayoutStore } from './state/layoutStore'
 
 /** MIME type used when dragging an already-imported asset from the media bin. */
 export const ASSET_DRAG_MIME = 'application/x-freecut-asset'
@@ -53,7 +54,13 @@ export async function importAssets(paths: string[]): Promise<ImportResult> {
     // Some codecs (ProRes, DNxHD, ...) demux fine in Chromium but never actually decode a
     // frame — no error, just a permanently blank/silent clip. ensurePreviewProxy returns null
     // immediately for anything already browser-playable, so this is a no-op for the common case.
-    const previewPath = probe.kind === 'image' ? undefined : (await window.api.ensurePreviewProxy(path, probe.videoCodec, probe.audioCodec)) ?? undefined
+    // Honors the user's "use proxies" preference (Inspector → Project): off = preview the
+    // original directly (faster import; incompatible codecs may show blank — export is unaffected).
+    const useProxies = useLayoutStore.getState().useProxies
+    const previewPath =
+      probe.kind === 'image' || !useProxies
+        ? undefined
+        : (await window.api.ensurePreviewProxy(path, probe.videoCodec, probe.audioCodec)) ?? undefined
 
     // Cover image for the timeline clip (first frame for video; the image file itself for images)
     // and an audio waveform (anything with an audio stream). Both are produced locally with the

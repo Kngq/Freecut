@@ -10,9 +10,13 @@ interface LayoutPrefs {
   inspectorWidth: number
   timelineHeight: number
   trackHeight: TrackHeightMode
+  /** When true (default), import generates H.264 preview proxies for codecs Chromium can't
+   *  decode (ProRes, DNxHD, …). Turning it off previews the original directly — faster import,
+   *  but such clips may show blank in the preview (export always uses the original regardless). */
+  useProxies: boolean
 }
 
-const DEFAULTS: LayoutPrefs = { mediaBinWidth: 220, inspectorWidth: 280, timelineHeight: 260, trackHeight: 'default' }
+const DEFAULTS: LayoutPrefs = { mediaBinWidth: 220, inspectorWidth: 280, timelineHeight: 260, trackHeight: 'default', useProxies: true }
 
 // Panels can be dragged well below their default size, but never past the point where they'd
 // become unusable (or, for the timeline, disappear entirely — the bug this was built to fix).
@@ -50,6 +54,7 @@ interface LayoutState extends LayoutPrefs {
   setInspectorWidth: (w: number) => void
   setTimelineHeight: (h: number) => void
   setTrackHeight: (mode: TrackHeightMode) => void
+  setUseProxies: (v: boolean) => void
 }
 
 export const useLayoutStore = create<LayoutState>((set, get) => ({
@@ -77,6 +82,12 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       const next = { ...pick(get()), trackHeight: mode }
       persist(next)
       return next
+    }),
+  setUseProxies: (v) =>
+    set(() => {
+      const next = { ...pick(get()), useProxies: v }
+      persist(next)
+      return next
     })
 }))
 
@@ -85,6 +96,7 @@ function pick(s: LayoutState): LayoutPrefs {
     mediaBinWidth: s.mediaBinWidth,
     inspectorWidth: s.inspectorWidth,
     timelineHeight: s.timelineHeight,
-    trackHeight: s.trackHeight
+    trackHeight: s.trackHeight,
+    useProxies: s.useProxies
   }
 }

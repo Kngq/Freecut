@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { canMergeWithNext, useProjectStore } from '../state/projectStore'
+import { useLayoutStore } from '../state/layoutStore'
 import {
   EFFECT_CATALOG,
   FONT_CATALOG,
@@ -213,6 +214,8 @@ export default function Inspector() {
   const project = useProjectStore((s) => s.project)
   const filePath = useProjectStore((s) => s.filePath)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
+  const useProxies = useLayoutStore((s) => s.useProxies)
+  const setUseProxies = useLayoutStore((s) => s.setUseProxies)
   const [tab, setTab] = useState<'video' | 'speed' | 'animation'>('video')
   const removeClip = useProjectStore((s) => s.removeClip)
   const mergeWithNext = useProjectStore((s) => s.mergeWithNext)
@@ -260,6 +263,16 @@ export default function Inspector() {
           <div className="detail-row"><dt>Media</dt><dd>{project.assets.length} asset{project.assets.length === 1 ? '' : 's'}</dd></div>
           <div className="detail-row"><dt>Proxy</dt><dd>{proxied > 0 ? `${proxied} proxied for preview` : 'None'}</dd></div>
         </dl>
+        <div className="field-row" style={{ marginTop: 12 }}>
+          <label>
+            <input type="checkbox" checked={useProxies} onChange={(e) => setUseProxies(e.target.checked)} />{' '}
+            Use preview proxies
+          </label>
+          <div className="empty-hint" style={{ padding: '4px 0 0' }}>
+            Generates H.264 proxies on import for codecs the preview can't decode (ProRes, etc.).
+            Export always uses the original. Applies to newly imported media.
+          </div>
+        </div>
         <div className="empty-hint" style={{ marginTop: 12 }}>Select a clip to edit its properties.</div>
       </div>
     )
