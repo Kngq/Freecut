@@ -4,6 +4,8 @@ import fs from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { probeMedia } from './probe'
 import { ensurePreviewProxy } from './proxy'
+import { ensureVideoCover } from './thumbnails'
+import { ensureWaveform } from './waveform'
 import { exportProject } from './export'
 import { handleMediaRequest } from './mediaProtocol'
 import { FILE_EXTENSION, type Project } from '@shared/types'
@@ -80,6 +82,14 @@ ipcMain.handle('media:probe', async (_e, filePath: string) => {
 
 ipcMain.handle('media:ensureProxy', async (_e, filePath: string, videoCodec?: string, audioCodec?: string) => {
   return ensurePreviewProxy(filePath, videoCodec, audioCodec)
+})
+
+ipcMain.handle('media:thumbnails', async (_e, filePath: string) => {
+  return ensureVideoCover(filePath)
+})
+
+ipcMain.handle('media:waveform', async (_e, filePath: string) => {
+  return ensureWaveform(filePath)
 })
 
 ipcMain.handle('project:saveDialog', async (_e, defaultName: string) => {

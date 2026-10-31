@@ -22,6 +22,20 @@ export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
     // immediately for anything already browser-playable, so this is a no-op for the common case.
     const previewPath = probe.kind === 'image' ? undefined : (await window.api.ensurePreviewProxy(path, probe.videoCodec, probe.audioCodec)) ?? undefined
 
+    // Cover image for the timeline clip (first frame for video; the image file itself for images)
+    // and an audio waveform (anything with an audio stream). Both are produced locally with the
+    // bundled ffmpeg and cached on disk — fully offline, no network. Generated off the ORIGINAL
+    // source (not the preview proxy) so they're correct even when no proxy exists.
+    const [videoCover, waveform] = await Promise.all([
+      probe.kind === 'video' ? window.api.generateThumbnails(path) : Promise.resolve(null),
+      probe.hasAudio || probe.kind === 'audio' ? window.api.generateWaveform(path) : Promise.resolve(null)
+    ])
+    // Images are their own cover — one frame, the image itself (no extraction needed).
+    const cover =
+      probe.kind === 'image'
+        ? { path, frames: 1, frameWidth: probe.width ?? 160, frameHeight: probe.height ?? 90 }
+        : videoCover ?? undefined
+
     assets.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       path,
@@ -31,7 +45,9 @@ export async function assetsFromPaths(paths: string[]): Promise<MediaAsset[]> {
       width: probe.width,
       height: probe.height,
       hasAudio: probe.hasAudio,
-      previewPath
+      previewPath,
+      cover,
+      waveform: waveform ?? undefined
     })
   }
   if (skipped.length > 0) alert(`Could not import:\n${skipped.join('\n')}`)

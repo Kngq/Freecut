@@ -1,7 +1,16 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { useProjectStore } from '../state/projectStore'
-import type { MediaAsset } from '@shared/types'
+import { canHaveTransition, useProjectStore } from '../state/projectStore'
+import {
+  EFFECT_CATALOG,
+  TRANSITION_CATALOG,
+  effectCatalogEntry,
+  formatMMSS,
+  type Clip,
+  type ClipEffectType,
+  type MediaAsset,
+  type TransitionType
+} from '@shared/types'
 import { ASSET_DRAG_MIME, assetsFromPaths, droppedFilePaths } from '../media'
 
 function TabIcon({ children }: { children: ReactNode }) {
@@ -64,7 +73,7 @@ const TABS: { id: TabId; label: string; enabled: boolean; icon: ReactNode }[] = 
   {
     id: 'effects',
     label: 'Effects',
-    enabled: false,
+    enabled: true,
     icon: (
       <TabIcon>
         <path d="M12 2c.6 3.8 2.2 5.4 6 6-3.8.6-5.4 2.2-6 6-.6-3.8-2.2-5.4-6-6 3.8-.6 5.4-2.2 6-6z" fill="currentColor" stroke="none" />
@@ -74,7 +83,7 @@ const TABS: { id: TabId; label: string; enabled: boolean; icon: ReactNode }[] = 
   {
     id: 'transitions',
     label: 'Transitions',
-    enabled: false,
+    enabled: true,
     icon: (
       <TabIcon>
         <path d="M5 6l6 6-6 6V6z" />
@@ -128,9 +137,26 @@ export default function MediaBin() {
   const removeAsset = useProjectStore((s) => s.removeAsset)
   const addMediaClipToTrack = useProjectStore((s) => s.addMediaClipToTrack)
   const addTextClipToTrack = useProjectStore((s) => s.addTextClipToTrack)
+  const setPreviewAsset = useProjectStore((s) => s.setPreviewAsset)
+  const previewAssetId = useProjectStore((s) => s.previewAssetId)
   const playhead = useProjectStore((s) => s.playhead)
+  const selectedClipId = useProjectStore((s) => s.selectedClipId)
+  const addClipEffect = useProjectStore((s) => s.addClipEffect)
+  const removeClipEffect = useProjectStore((s) => s.removeClipEffect)
+  const setTransition = useProjectStore((s) => s.setTransition)
+  const setTransitionType = useProjectStore((s) => s.setTransitionType)
   const [dropActive, setDropActive] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('media')
+
+  // The clip the Effects/Transitions tabs act on (mirrors the Inspector's selection).
+  let selectedClip: Clip | null = null
+  for (const track of project.tracks) {
+    const c = track.clips.find((cl) => cl.id === selectedClipId)
+    if (c) {
+      selectedClip = c
+      break
+    }
+  }
 
   async function importPaths(paths: string[]) {
     for (const asset of await assetsFromPaths(paths)) addAsset(asset)
@@ -150,6 +176,20 @@ export default function MediaBin() {
   function handleAddText() {
     const textTrack = project.tracks.find((t) => t.type === 'text')
     if (textTrack) addTextClipToTrack(textTrack.id, playhead)
+  }
+
+  function handleApplyEffect(type: ClipEffectType) {
+    if (selectedClipId) addClipEffect(selectedClipId, type)
+  }
+
+  function handleApplyTransition(type: TransitionType) {
+    if (!selectedClipId) return
+    // Give the transition a sensible default length if the clip has none yet, then set its
+    // type. setTransition/setTransitionType are no-ops on clips that can't carry a transition.
+    if (!selectedClip?.transitionIn || selectedClip.transitionIn.duration <= 0) {
+      setTransition(selectedClipId, 1)
+    }
+    setTransitionType(selectedClipId, type)
   }
 
   function handleRemoveAsset(asset: MediaAsset, e: React.MouseEvent) {
@@ -183,28 +223,48 @@ export default function MediaBin() {
     return (
       <>
         {assets.length === 0 && <div className="empty-hint">{emptyHint}</div>}
-        {assets.map((asset) => (
-          <div
-            className="asset-item"
-            key={asset.id}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(ASSET_DRAG_MIME, asset.id)
-              e.dataTransfer.effectAllowed = 'copy'
-            }}
-            onDoubleClick={() => handleAddToTimeline(asset)}
-            title="Drag onto the timeline, or double-click to add"
-          >
-            <button className="asset-item-remove" title="Remove from media pool" onClick={(e) => handleRemoveAsset(asset, e)}>
-              ×
-            </button>
-            <div className="name">{asset.name}</div>
-            <div className="meta">
-              {asset.kind}
-              {asset.duration > 0 ? ` · ${asset.duration.toFixed(1)}s` : ''}
-            </div>
-          </div>
-        ))}
+        <div className="asset-grid">
+          {assets.map((asset) => {
+            // Show the FIRST frame of the cover sprite as the card thumbnail, fit to the card's
+            // full width with its natural aspect (letterboxed top/bottom in the square). The
+            // sprite is `frames` frames wide, so width = frames*100% makes each frame one card
+            // wide; height auto keeps the aspect; left/center isolates frame 0.
+            const frames = asset.cover ? Math.max(1, asset.cover.frames) : 1
+            const thumbStyle = asset.cover
+              ? {
+                  backgroundImage: `url(${window.api.fileUrl(asset.cover.path)})`,
+                  backgroundSize: `${frames * 100}% auto`,
+                  backgroundPosition: 'left center',
+                  backgroundRepeat: 'no-repeat'
+                }
+              : undefined
+            return (
+              <div
+                className={`asset-card ${previewAssetId === asset.id ? 'previewing' : ''}`}
+                key={asset.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(ASSET_DRAG_MIME, asset.id)
+                  e.dataTransfer.effectAllowed = 'copy'
+                }}
+                onClick={() => setPreviewAsset(asset.id)}
+                onDoubleClick={() => handleAddToTimeline(asset)}
+                title="Click to preview, drag onto the timeline, or double-click to add"
+              >
+                <div className="asset-thumb" style={thumbStyle}>
+                  {!asset.cover && <span className="asset-thumb-fallback">{asset.kind}</span>}
+                  {asset.duration > 0 && <span className="asset-duration">{formatMMSS(asset.duration)}</span>}
+                  <button className="asset-item-remove" title="Remove from media pool" onClick={(e) => handleRemoveAsset(asset, e)}>
+                    ×
+                  </button>
+                </div>
+                <div className="asset-card-name" title={asset.name}>
+                  {asset.name}
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </>
     )
   }
@@ -258,6 +318,72 @@ export default function MediaBin() {
             + Add text
           </button>
           <div className="empty-hint">Adds a text clip to the Text track at the playhead.</div>
+        </div>
+      )}
+      {activeTab === 'effects' && (
+        <div className="media-bin-body">
+          {!selectedClip || selectedClip.kind !== 'media' ? (
+            <div className="empty-hint">Select a video or image clip on the timeline to apply an effect.</div>
+          ) : (
+            <>
+              <div className="empty-hint" style={{ padding: '0 0 8px' }}>Click an effect to add it to the selected clip.</div>
+              <div className="fx-grid">
+                {EFFECT_CATALOG.map((entry) => (
+                  <button key={entry.type} className="fx-card" onClick={() => handleApplyEffect(entry.type)} title={`Add "${entry.label}"`}>
+                    <span className="fx-card-label">{entry.label}</span>
+                  </button>
+                ))}
+              </div>
+              {selectedClip.effects && selectedClip.effects.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 14 }}>Applied</h3>
+                  {selectedClip.effects.map((fx) => (
+                    <div className="fx-applied-row" key={fx.id}>
+                      <span>{effectCatalogEntry(fx.type)?.label ?? fx.type}</span>
+                      <button title="Remove effect" onClick={() => selectedClipId && removeClipEffect(selectedClipId, fx.id)}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <div className="empty-hint" style={{ padding: '6px 0 0' }}>Fine-tune parameters in the Inspector.</div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      {activeTab === 'transitions' && (
+        <div className="media-bin-body">
+          {!canHaveTransition(project, selectedClipId) ? (
+            <div className="empty-hint">
+              Select a clip on the main video track (not the first clip) to add a transition into it from the previous clip.
+            </div>
+          ) : (
+            <>
+              <div className="empty-hint" style={{ padding: '0 0 8px' }}>Click a transition to apply it to the selected clip.</div>
+              <div className="fx-grid">
+                {TRANSITION_CATALOG.map((t) => {
+                  const active = selectedClip?.transitionIn?.type === t.type && (selectedClip?.transitionIn?.duration ?? 0) > 0
+                  return (
+                    <button
+                      key={t.type}
+                      className={`fx-card ${active ? 'active' : ''}`}
+                      onClick={() => handleApplyTransition(t.type)}
+                      title={`Apply "${t.label}"`}
+                    >
+                      <span className="fx-card-label">{t.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {selectedClip?.transitionIn && selectedClip.transitionIn.duration > 0 && (
+                <div className="empty-hint" style={{ padding: '10px 0 0' }}>
+                  Current: {TRANSITION_CATALOG.find((t) => t.type === selectedClip!.transitionIn!.type)?.label} ·{' '}
+                  {selectedClip.transitionIn.duration.toFixed(2)}s — adjust duration in the Inspector.
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

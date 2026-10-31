@@ -1,19 +1,23 @@
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
 import {
+  createEffect,
   createEmptyProject,
   defaultTransform,
   effectiveDuration,
   projectDuration,
   sourceTimeFor,
   type Clip,
+  type ClipEffect,
+  type ClipEffectType,
   type ClipTransform,
   type MediaAsset,
   type MediaClip,
   type Project,
   type SpeedKeyframe,
   type Track,
-  type TrackType
+  type TrackType,
+  type TransitionType
 } from '@shared/types'
 
 interface ProjectState {
@@ -21,12 +25,26 @@ interface ProjectState {
   filePath: string | null
   dirty: boolean
   selectedClipId: string | null
+  /** Transient: a media asset being previewed on its own in the Preview panel (from clicking a
+   *  card in the MediaBin), independent of the timeline. Null = show the timeline as normal.
+   *  Session-only, never serialized. */
+  previewAssetId: string | null
   playhead: number
   isPlaying: boolean
   pxPerSecond: number
+  /** Undo/redo history: `past` holds prior project snapshots (most recent last), `future`
+   *  holds snapshots undone off the top of `past` (for redo). Both are cleared on
+   *  setProject/newProject. Capped to HISTORY_LIMIT to bound memory. */
+  past: Project[]
+  future: Project[]
 
   setProject: (project: Project, filePath?: string | null) => void
   newProject: () => void
+
+  /** Reverts to the previous project snapshot (no-op when `past` is empty). */
+  undo: () => void
+  /** Re-applies the most recently undone snapshot (no-op when `future` is empty). */
+  redo: () => void
 
   addAsset: (asset: MediaAsset) => void
   /** Removes an asset from the media pool and any clips on the timeline that reference it. */
@@ -54,15 +72,30 @@ interface ProjectState {
   /** Replaces a clip's transform (position/scale/opacity, optionally keyframed). Works for
    *  both media and text clips since `transform` lives on ClipBase. */
   setClipTransform: (clipId: string, transform: ClipTransform) => void
+  /** Rotates a clip by `deltaDegrees` (the toolbar uses +90). Normalized to [0,360). */
+  rotateClip: (clipId: string, deltaDegrees: number) => void
+  /** Toggles a clip's horizontal mirror (the toolbar's Mirror button). */
+  toggleClipFlipH: (clipId: string) => void
   /** Rejoins a clip with its immediate next sibling on the same video track — the inverse of
    *  Split. Only valid when canMergeWithNext() agrees; a no-op otherwise. */
   mergeWithNext: (clipId: string) => void
   removeClip: (clipId: string) => void
   setTransition: (clipId: string, duration: number) => void
+  /** Changes the transition type (crossfade/slide/wipe/…) without touching its duration; a
+   *  no-op when the clip has no transitionIn yet (set a duration first). */
+  setTransitionType: (clipId: string, type: TransitionType) => void
+  /** Appends a default-param effect of `type` to a clip's effect stack. */
+  addClipEffect: (clipId: string, type: ClipEffectType) => void
+  /** Removes one effect instance by its id. */
+  removeClipEffect: (clipId: string, effectId: string) => void
+  /** Patches one numeric param of one effect instance. */
+  updateClipEffectParam: (clipId: string, effectId: string, key: string, value: number) => void
   updateTextClip: (clipId: string, patch: Record<string, unknown>) => void
   updateMediaClipProps: (clipId: string, patch: Partial<Pick<MediaClip, 'volume' | 'muted'>>) => void
 
   selectClip: (clipId: string | null) => void
+  /** Sets (or clears, with null) the asset previewed standalone in the Preview panel. */
+  setPreviewAsset: (assetId: string | null) => void
   setPlayhead: (t: number) => void
   setIsPlaying: (v: boolean) => void
   setZoom: (pxPerSecond: number) => void
@@ -90,6 +123,18 @@ export function canMergeWithNext(project: Project, clipId: string): boolean {
   if (!next || next.kind !== 'media' || next.frozen || (next.speedKeyframes?.length ?? 0) >= 2) return false
   if (next.assetId !== clip.assetId || next.speed !== clip.speed || next.reversed !== clip.reversed) return false
   return Math.abs(next.trimIn - clip.trimOut) <= 1e-6
+}
+
+/** Whether `clipId` can carry a transitionIn: it must be a media/text clip on the FIRST video
+ *  track and not the first clip in that track (a transition blends it with the clip before it).
+ *  Mirrors the guard in setTransition, and the Inspector's inline `canHaveTransition`. Exported
+ *  so the Transitions tab can decide whether applying a transition will take effect. */
+export function canHaveTransition(project: Project, clipId: string | null): boolean {
+  if (!clipId) return false
+  const found = findClip(project, clipId)
+  if (!found || found.track.type !== 'video') return false
+  const firstVideoTrack = project.tracks.find((t) => t.type === 'video')
+  return found.track.id === firstVideoTrack?.id && found.index > 0
 }
 
 /** Whether a freeze frame can be inserted at `playhead` into `clipId`: it must be a plain
@@ -178,18 +223,63 @@ function splitMediaClipHalves(clip: MediaClip, firstDuration: number): { first: 
   }
 }
 
+/** Max number of undo snapshots kept, to bound memory for long sessions. */
+const HISTORY_LIMIT = 100
+
+/** Returns the `past`/`future` update that records the current project as an undo point before
+ *  a committing mutation: appends `current` to `past` (capped) and clears `future` (a new edit
+ *  invalidates the redo stack). Spread into a mutation's returned state alongside the new
+ *  `project`. Example: `return { project: next, dirty: true, ...recordPast(s) }`. */
+function recordPast(s: { project: Project; past: Project[] }): { past: Project[]; future: Project[] } {
+  return { past: [...s.past, s.project].slice(-HISTORY_LIMIT), future: [] }
+}
+
+/** A timeline at or beyond this length (seconds) is treated as "long": adding a clip that pushes
+ *  the project past it snaps the timeline to minimum zoom (and thus the minute-scale ruler). */
+const LONG_TIMELINE_SECONDS = 60
+
 export const useProjectStore = create<ProjectState>((set) => ({
   project: createEmptyProject('Untitled'),
   filePath: null,
   dirty: false,
   selectedClipId: null,
+  previewAssetId: null,
   playhead: 0,
   isPlaying: false,
   pxPerSecond: 60,
+  past: [],
+  future: [],
 
-  setProject: (project, filePath = null) => set({ project, filePath, dirty: false, selectedClipId: null, playhead: 0 }),
+  setProject: (project, filePath = null) => set({ project, filePath, dirty: false, selectedClipId: null, previewAssetId: null, playhead: 0, past: [], future: [] }),
 
-  newProject: () => set({ project: createEmptyProject('Untitled'), filePath: null, dirty: false, selectedClipId: null, playhead: 0 }),
+  newProject: () => set({ project: createEmptyProject('Untitled'), filePath: null, dirty: false, selectedClipId: null, previewAssetId: null, playhead: 0, past: [], future: [] }),
+
+  undo: () =>
+    set((s) => {
+      if (s.past.length === 0) return {}
+      const previous = s.past[s.past.length - 1]
+      return {
+        project: previous,
+        past: s.past.slice(0, -1),
+        future: [s.project, ...s.future].slice(0, HISTORY_LIMIT),
+        dirty: true,
+        // Keep the selection only if it still exists in the restored project.
+        selectedClipId: s.selectedClipId && findClip(previous, s.selectedClipId) ? s.selectedClipId : null
+      }
+    }),
+
+  redo: () =>
+    set((s) => {
+      if (s.future.length === 0) return {}
+      const next = s.future[0]
+      return {
+        project: next,
+        past: [...s.past, s.project].slice(-HISTORY_LIMIT),
+        future: s.future.slice(1),
+        dirty: true,
+        selectedClipId: s.selectedClipId && findClip(next, s.selectedClipId) ? s.selectedClipId : null
+      }
+    }),
 
   addAsset: (asset) =>
     set((s) => ({ project: touch({ ...s.project, assets: [...s.project.assets, asset] }), dirty: true })),
@@ -203,7 +293,14 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const assets = s.project.assets.filter((a) => a.id !== assetId)
       const project = touch({ ...s.project, tracks, assets })
       const selectionStillExists = s.selectedClipId !== null && findClip(project, s.selectedClipId) !== null
-      return { project, dirty: true, selectedClipId: selectionStillExists ? s.selectedClipId : null }
+      const previewStillExists = s.previewAssetId !== null && assets.some((a) => a.id === s.previewAssetId)
+      return {
+        project,
+        dirty: true,
+        selectedClipId: selectionStillExists ? s.selectedClipId : null,
+        previewAssetId: previewStillExists ? s.previewAssetId : null,
+        ...recordPast(s)
+      }
     }),
 
   addMediaClipToTrack: (trackId, asset, start, options) =>
@@ -236,7 +333,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
         }
         return repackVideoTrack({ ...t, clips })
       })
-      return { project, dirty: true, selectedClipId: clip.id }
+      // When the timeline becomes "long" (>= LONG_TIMELINE_SECONDS), snap to minimum zoom so the
+      // whole thing fits. Setting pxPerSecond to 1 lands below the Timeline's dynamic floor; the
+      // Timeline's clamp effect then pulls it up to exactly the "half the timeline" minimum, and
+      // the adaptive ruler switches to a minute scale at that zoom. We only ever drop zoom here
+      // (never raise it), so a user who's zoomed in on a short project isn't disturbed.
+      const zoomPatch = projectDuration(project) >= LONG_TIMELINE_SECONDS ? { pxPerSecond: 1 } : {}
+      return { project, dirty: true, selectedClipId: clip.id, ...zoomPatch, ...recordPast(s) }
     }),
 
   addTextClipToTrack: (trackId, start) =>
@@ -254,7 +357,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         transform: defaultTransform()
       }
       const project = updateTrack(s.project, trackId, (t) => ({ ...t, clips: [...t.clips, clip] }))
-      return { project, dirty: true, selectedClipId: clip.id }
+      return { project, dirty: true, selectedClipId: clip.id, ...recordPast(s) }
     }),
 
   addTrack: (type) =>
@@ -268,7 +371,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         muted: false,
         hidden: false
       }
-      return { project: touch({ ...s.project, tracks: [...s.project.tracks, track] }), dirty: true }
+      return { project: touch({ ...s.project, tracks: [...s.project.tracks, track] }), dirty: true, ...recordPast(s) }
     }),
 
   moveFreeClip: (clipId, newStart, newTrackId) =>
@@ -290,7 +393,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         }
         return t
       })
-      return { project: touch({ ...s.project, tracks }), dirty: true }
+      return { project: touch({ ...s.project, tracks }), dirty: true, ...recordPast(s) }
     }),
 
   reorderVideoClip: (clipId, toTrackId, toIndex) =>
@@ -313,7 +416,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         }
         return t
       })
-      return { project: touch({ ...s.project, tracks }), dirty: true }
+      return { project: touch({ ...s.project, tracks }), dirty: true, ...recordPast(s) }
     }),
 
   trimClip: (clipId, edge, newTime) =>
@@ -405,7 +508,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         clips.splice(index + 1, 0, second)
         return repackVideoTrack({ ...tr, clips })
       })
-      return { project, dirty: true, selectedClipId: second.id }
+      return { project, dirty: true, selectedClipId: second.id, ...recordPast(s) }
     }),
 
   insertFreezeFrame: (clipId) =>
@@ -442,7 +545,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         clips.splice(index + 1, 0, freeze, second)
         return repackVideoTrack({ ...tr, clips })
       })
-      return { project, dirty: true, selectedClipId: freeze.id }
+      return { project, dirty: true, selectedClipId: freeze.id, ...recordPast(s) }
     }),
 
   mergeWithNext: (clipId) =>
@@ -457,7 +560,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         clips.splice(index, 2, merged)
         return repackVideoTrack({ ...t, clips })
       })
-      return { project, dirty: true, selectedClipId: merged.id }
+      return { project, dirty: true, selectedClipId: merged.id, ...recordPast(s) }
     }),
 
   removeClip: (clipId) =>
@@ -465,7 +568,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
       const found = findClip(s.project, clipId)
       if (!found) return {}
       const project = updateTrack(s.project, found.track.id, (t) => repackVideoTrack({ ...t, clips: t.clips.filter((c) => c.id !== clipId) }))
-      return { project, dirty: true, selectedClipId: s.selectedClipId === clipId ? null : s.selectedClipId }
+      return { project, dirty: true, selectedClipId: s.selectedClipId === clipId ? null : s.selectedClipId, ...recordPast(s) }
     }),
 
   setTransition: (clipId, duration) =>
@@ -480,6 +583,67 @@ export const useProjectStore = create<ProjectState>((set) => ({
         }
         return repackVideoTrack(withPatch)
       })
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
+  setTransitionType: (clipId, type) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found || found.track.type !== 'video') return {}
+      const clip = found.clip
+      if (!clip.transitionIn) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = {
+          ...t,
+          clips: t.clips.map((c) => (c.id === clipId && c.transitionIn ? { ...c, transitionIn: { ...c.transitionIn, type } } : c))
+        }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
+  addClipEffect: (clipId, type) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const effect = createEffect(type, uuid())
+      const project = updateTrack(s.project, found.track.id, (t) => ({
+        ...t,
+        clips: t.clips.map((c) => (c.id === clipId ? ({ ...c, effects: [...(c.effects ?? []), effect] } as Clip) : c))
+      }))
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
+  removeClipEffect: (clipId, effectId) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => ({
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.id !== clipId) return c
+          const effects = (c.effects ?? []).filter((e) => e.id !== effectId)
+          // Drop the array entirely when empty so serialized projects stay minimal.
+          return { ...c, effects: effects.length > 0 ? effects : undefined } as Clip
+        })
+      }))
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
+  updateClipEffectParam: (clipId, effectId, key, value) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => ({
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.id !== clipId) return c
+          const effects = (c.effects ?? []).map((e: ClipEffect) =>
+            e.id === effectId ? { ...e, params: { ...e.params, [key]: value } } : e
+          )
+          return { ...c, effects } as Clip
+        })
+      }))
       return { project, dirty: true }
     }),
 
@@ -544,6 +708,39 @@ export const useProjectStore = create<ProjectState>((set) => ({
       return { project, dirty: true }
     }),
 
+  rotateClip: (clipId, deltaDegrees) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = {
+          ...t,
+          clips: t.clips.map((c) => {
+            if (c.id !== clipId) return c
+            const current = c.transform.rotation ?? 0
+            const rotation = (((current + deltaDegrees) % 360) + 360) % 360
+            return { ...c, transform: { ...c.transform, rotation } }
+          })
+        }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
+  toggleClipFlipH: (clipId) =>
+    set((s) => {
+      const found = findClip(s.project, clipId)
+      if (!found) return {}
+      const project = updateTrack(s.project, found.track.id, (t) => {
+        const withPatch = {
+          ...t,
+          clips: t.clips.map((c) => (c.id === clipId ? { ...c, transform: { ...c.transform, flipH: !c.transform.flipH } } : c))
+        }
+        return repackVideoTrack(withPatch)
+      })
+      return { project, dirty: true, ...recordPast(s) }
+    }),
+
   updateTextClip: (clipId, patch) =>
     set((s) => {
       const found = findClip(s.project, clipId)
@@ -566,10 +763,11 @@ export const useProjectStore = create<ProjectState>((set) => ({
       return { project, dirty: true }
     }),
 
-  selectClip: (clipId) => set({ selectedClipId: clipId }),
-  setPlayhead: (t) => set({ playhead: Math.max(0, t) }),
+  selectClip: (clipId) => set((s) => ({ selectedClipId: clipId, previewAssetId: clipId ? null : s.previewAssetId })),
+  setPreviewAsset: (assetId) => set({ previewAssetId: assetId, isPlaying: false }),
+  setPlayhead: (t) => set({ playhead: Math.max(0, t), previewAssetId: null }),
   setIsPlaying: (v) => set({ isPlaying: v }),
-  setZoom: (pxPerSecond) => set({ pxPerSecond: Math.min(Math.max(pxPerSecond, 10), 400) })
+  setZoom: (pxPerSecond) => set({ pxPerSecond: Math.min(Math.max(pxPerSecond, 1), 400) })
 }))
 
 export function getProjectDuration(project: Project): number {

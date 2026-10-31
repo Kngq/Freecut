@@ -1,5 +1,15 @@
 import { canMergeWithNext, useProjectStore } from '../state/projectStore'
-import type { ClipTransform, SpeedKeyframe, TransformKeyframe } from '@shared/types'
+import {
+  EFFECT_CATALOG,
+  TRANSITION_CATALOG,
+  effectCatalogEntry,
+  type ClipEffect,
+  type ClipEffectType,
+  type ClipTransform,
+  type SpeedKeyframe,
+  type TransformKeyframe,
+  type TransitionType
+} from '@shared/types'
 
 /** Position/scale/opacity editor shared by text and media clips (both have `transform` on
  *  ClipBase) — static sliders, or an editable (time, x, y, scale, opacity) keyframe list once
@@ -127,12 +137,84 @@ function TransformFields({
   )
 }
 
+/** Add/remove/configure the per-clip effect stack. Each effect is a labeled row with a remove
+ *  button and one slider per catalog param. Mirrors TransformFields' shape. The rendering math
+ *  lives in shared/effects.ts (preview) and ffmpegGraph.ts (export). */
+function EffectFields({
+  effects,
+  onAdd,
+  onRemove,
+  onParam
+}: {
+  effects: ClipEffect[]
+  onAdd: (type: ClipEffectType) => void
+  onRemove: (effectId: string) => void
+  onParam: (effectId: string, key: string, value: number) => void
+}) {
+  return (
+    <div className="field-row">
+      <label>Effects</label>
+      {effects.length === 0 && <div className="empty-hint" style={{ marginBottom: 6 }}>No effects.</div>}
+      {effects.map((effect) => {
+        const entry = effectCatalogEntry(effect.type)
+        return (
+          <div key={effect.id} style={{ border: '1px solid var(--border)', borderRadius: 4, padding: 6, marginBottom: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <strong style={{ fontSize: 12 }}>{entry?.label ?? effect.type}</strong>
+              <button title="Remove effect" onClick={() => onRemove(effect.id)}>
+                ×
+              </button>
+            </div>
+            {entry?.params.map((p) => {
+              const value = typeof effect.params[p.key] === 'number' ? effect.params[p.key] : p.default
+              return (
+                <div key={p.key} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 3 }}>
+                  <span style={{ flex: '0 0 96px', fontSize: 11, color: 'var(--text-dim)' }}>{p.label}</span>
+                  <input
+                    type="range"
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    value={value}
+                    style={{ flex: 1 }}
+                    onChange={(e) => onParam(effect.id, p.key, Number(e.target.value))}
+                  />
+                  <span style={{ flex: '0 0 36px', fontSize: 11, textAlign: 'right' }}>{value}</span>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+      <select
+        value=""
+        style={{ width: '100%' }}
+        onChange={(e) => {
+          if (e.target.value) onAdd(e.target.value as ClipEffectType)
+          e.target.value = ''
+        }}
+      >
+        <option value="">+ Add effect…</option>
+        {EFFECT_CATALOG.map((entry) => (
+          <option key={entry.type} value={entry.type}>
+            {entry.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 export default function Inspector() {
   const project = useProjectStore((s) => s.project)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const removeClip = useProjectStore((s) => s.removeClip)
   const mergeWithNext = useProjectStore((s) => s.mergeWithNext)
   const setTransition = useProjectStore((s) => s.setTransition)
+  const setTransitionType = useProjectStore((s) => s.setTransitionType)
+  const addClipEffect = useProjectStore((s) => s.addClipEffect)
+  const removeClipEffect = useProjectStore((s) => s.removeClipEffect)
+  const updateClipEffectParam = useProjectStore((s) => s.updateClipEffectParam)
   const updateTextClip = useProjectStore((s) => s.updateTextClip)
   const updateMediaClipProps = useProjectStore((s) => s.updateMediaClipProps)
   const setClipSpeed = useProjectStore((s) => s.setClipSpeed)
@@ -219,6 +301,12 @@ export default function Inspector() {
               <input type="checkbox" checked={clip.muted} onChange={(e) => updateMediaClipProps(clip.id, { muted: e.target.checked })} /> Muted
             </label>
           </div>
+          <EffectFields
+            effects={clip.effects ?? []}
+            onAdd={(type) => addClipEffect(clip.id, type)}
+            onRemove={(effectId) => removeClipEffect(clip.id, effectId)}
+            onParam={(effectId, key, value) => updateClipEffectParam(clip.id, effectId, key, value)}
+          />
         </>
       )}
 
@@ -334,17 +422,35 @@ export default function Inspector() {
       })()}
 
       {canHaveTransition && (
-        <div className="field-row">
-          <label>Transition in ({(clip.transitionIn?.duration ?? 0).toFixed(2)}s crossfade)</label>
-          <input
-            type="range"
-            min={0}
-            max={2}
-            step={0.05}
-            value={clip.transitionIn?.duration ?? 0}
-            onChange={(e) => setTransition(clip.id, Number(e.target.value))}
-          />
-        </div>
+        <>
+          <div className="field-row">
+            <label>Transition in ({(clip.transitionIn?.duration ?? 0).toFixed(2)}s)</label>
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.05}
+              value={clip.transitionIn?.duration ?? 0}
+              onChange={(e) => setTransition(clip.id, Number(e.target.value))}
+            />
+          </div>
+          {clip.transitionIn && clip.transitionIn.duration > 0 && (
+            <div className="field-row">
+              <label>Transition type</label>
+              <select
+                value={clip.transitionIn.type}
+                style={{ width: '100%' }}
+                onChange={(e) => setTransitionType(clip.id, e.target.value as TransitionType)}
+              >
+                {TRANSITION_CATALOG.map((t) => (
+                  <option key={t.type} value={t.type}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </>
       )}
 
       {canMerge && (

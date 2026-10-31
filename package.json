@@ -13,6 +13,7 @@
     "test:export:reverse": "tsx scripts/testExportReverse.ts",
     "test:export:freeze": "tsx scripts/testExportFreeze.ts",
     "test:export:keyframes": "tsx scripts/testExportKeyframes.ts",
+    "test:export:effects": "tsx scripts/testExportEffects.ts",
     "test": "vitest run"
   },
   "dependencies": {

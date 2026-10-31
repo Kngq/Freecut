@@ -21,24 +21,48 @@ export default function App() {
   const setIsPlaying = useProjectStore((s) => s.setIsPlaying)
   const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
   const removeClip = useProjectStore((s) => s.removeClip)
+  const undo = useProjectStore((s) => s.undo)
+  const redo = useProjectStore((s) => s.redo)
+  const toggleClipFlipH = useProjectStore((s) => s.toggleClipFlipH)
+  const rotateClip = useProjectStore((s) => s.rotateClip)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
 
   useEffect(() => {
     if (view !== 'editor') return
     function onKeyDown(e: KeyboardEvent) {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return
-      if (e.code === 'Space') {
+      const target = e.target as HTMLElement | null
+      // Don't hijack typing in form fields.
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+        return
+      }
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && (e.key === 'z' || e.key === 'Z')) {
+        // Cmd+Z = undo, Cmd+Shift+Z = redo.
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+      } else if (mod && (e.key === 'b' || e.key === 'B')) {
+        // Cmd+B = split at playhead.
+        e.preventDefault()
+        splitClipAtPlayhead()
+      } else if (mod && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        // Cmd+Shift+F = flip (rotate 90°) the selected clip.
+        e.preventDefault()
+        if (selectedClipId) rotateClip(selectedClipId, 90)
+      } else if (mod && (e.key === 'm' || e.key === 'M')) {
+        // Cmd+M = mirror (horizontal flip) the selected clip.
+        e.preventDefault()
+        if (selectedClipId) toggleClipFlipH(selectedClipId)
+      } else if (e.code === 'Space') {
         e.preventDefault()
         setIsPlaying(!isPlaying)
-      } else if (e.key === 's') {
-        splitClipAtPlayhead()
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         if (selectedClipId) removeClip(selectedClipId)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [view, isPlaying, selectedClipId, setIsPlaying, splitClipAtPlayhead, removeClip])
+  }, [view, isPlaying, selectedClipId, setIsPlaying, splitClipAtPlayhead, removeClip, undo, redo, toggleClipFlipH, rotateClip])
 
   if (view === 'home') {
     return <Home onEnterEditor={() => setView('editor')} />

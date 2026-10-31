@@ -1,5 +1,22 @@
 export type MediaKind = 'video' | 'audio' | 'image'
 
+export interface ThumbnailCover {
+  /** Absolute path to a thumbnail sprite: FRAMES distinct frames sampled across the source and
+   *  laid out left-to-right in one image (or the image file itself for image assets, frames=1).
+   *  Generated locally with ffmpeg. The renderer tiles/slices these across a timeline clip. */
+  path: string
+  /** Number of distinct frames in the sprite (1 for images). */
+  frames: number
+  /** Pixel width and height of one frame within the sprite. */
+  frameWidth: number
+  frameHeight: number
+}
+
+export interface Waveform {
+  /** Normalized peak magnitudes in 0..1, evenly spaced across the source duration. */
+  peaks: number[]
+}
+
 export interface MediaAsset {
   id: string
   path: string
@@ -13,14 +30,66 @@ export interface MediaAsset {
    *  (e.g. ProRes) can't be decoded by Chromium's <video>/<audio> even though ffmpeg can.
    *  Export always reads `path` directly, never this. */
   previewPath?: string
+  /** Cover image for the timeline clip — the video's first frame, or the image itself for image
+   *  assets. Absent for audio or if generation failed; the clip then falls back to a flat color. */
+  cover?: ThumbnailCover
+  /** Normalized audio peaks for the timeline waveform (sources with audio only). */
+  waveform?: Waveform
 }
 
-export type TransitionType = 'crossfade' | 'dipToBlack'
+/**
+ * Transition between two adjacent primary-track clips. CapCut treats every transition as an
+ * overlap of the outgoing and incoming clip over a normalized 0..1 progress (catalog type 19,
+ * `sdk_extra.transition = {isOverlap:true}`) — see docs/capcut-effects-reimplementation.md.
+ * freecut models that overlap the same way the original crossfade did (pull the incoming clip's
+ * start back by the transition duration, mirrored in both preview and the ffmpeg `xfade`
+ * offset math). Each type here maps to an ffmpeg `xfade=transition=<name>` on export and to a
+ * best-effort Canvas-2D approximation in the live preview.
+ *
+ * `crossfade`/`dipToBlack` are kept as-is for backward compatibility with existing `.fcproj`
+ * files (crossfade === fade, dipToBlack === fadeblack).
+ */
+export type TransitionType =
+  | 'crossfade' // plain cross dissolve (ffmpeg xfade=fade)
+  | 'dipToBlack' // fade through black (xfade=fadeblack)
+  | 'dipToWhite' // fade through white (xfade=fadewhite)
+  | 'dissolve' // grainy pixel dissolve (xfade=dissolve)
+  | 'slideLeft' // push: new clip enters from the right, old exits left (xfade=slideleft)
+  | 'slideRight'
+  | 'slideUp'
+  | 'slideDown'
+  | 'wipeLeft' // hard wipe boundary sweeping across (xfade=wipeleft)
+  | 'wipeRight'
+  | 'wipeUp'
+  | 'wipeDown'
+  | 'zoomIn' // CapCut "Zoom" transition, approximated (xfade=zoomin)
+  | 'circleOpen' // iris (xfade=circleopen)
+  | 'circleClose'
 
 export interface Transition {
   type: TransitionType
   duration: number // seconds, overlaps the end of the previous clip with the start of this clip
 }
+
+/** Ordered catalog of selectable transition types with human-readable labels, for the
+ *  Inspector's dropdown. Order roughly follows docs/capcut-effects-reimplementation.md. */
+export const TRANSITION_CATALOG: { type: TransitionType; label: string }[] = [
+  { type: 'crossfade', label: 'Cross dissolve' },
+  { type: 'dipToBlack', label: 'Fade to black' },
+  { type: 'dipToWhite', label: 'Fade to white' },
+  { type: 'dissolve', label: 'Dissolve (grainy)' },
+  { type: 'slideLeft', label: 'Slide left' },
+  { type: 'slideRight', label: 'Slide right' },
+  { type: 'slideUp', label: 'Slide up' },
+  { type: 'slideDown', label: 'Slide down' },
+  { type: 'wipeLeft', label: 'Wipe left' },
+  { type: 'wipeRight', label: 'Wipe right' },
+  { type: 'wipeUp', label: 'Wipe up' },
+  { type: 'wipeDown', label: 'Wipe down' },
+  { type: 'zoomIn', label: 'Zoom' },
+  { type: 'circleOpen', label: 'Circle open' },
+  { type: 'circleClose', label: 'Circle close' }
+]
 
 export interface TransformKeyframe {
   time: number // clip-local timeline seconds, 0..effective clip duration
@@ -31,17 +100,23 @@ export interface TransformKeyframe {
 }
 
 /** Position/scale/opacity for a clip. Static unless `keyframes` has >=2 points, in which case
- *  the static x/y/scale/opacity are ignored and interpolateTransform() drives the value instead. */
+ *  the static x/y/scale/opacity are ignored and interpolateTransform() drives the value instead.
+ *  `rotation` (degrees, clockwise) and `flipH` (horizontal mirror) are always static — they're
+ *  driven by the timeline toolbar's rotate/mirror buttons, not keyframed in v1. Both are
+ *  optional so pre-existing `.fcproj` files (and the keyframe interpolation result) round-trip
+ *  without them. */
 export interface ClipTransform {
   x: number // 0-1, relative to canvas width, anchor center
   y: number // 0-1, relative to canvas height, anchor center
   scale: number // 1 = 100%
   opacity: number // 0-1
+  rotation?: number // degrees clockwise, default 0
+  flipH?: boolean // horizontal mirror, default false
   keyframes?: TransformKeyframe[]
 }
 
 export function defaultTransform(): ClipTransform {
-  return { x: 0.5, y: 0.5, scale: 1, opacity: 1 }
+  return { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0, flipH: false }
 }
 
 /** Linearly interpolates a transform's value at a clip-local time. Falls back to the static
@@ -76,6 +151,167 @@ function pickTransform(k: TransformKeyframe) {
   return { x: k.x, y: k.y, scale: k.scale, opacity: k.opacity }
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Clip effects
+ *
+ * A single-clip, per-frame visual effect, applied in the preview (Canvas 2D) and on export
+ * (an ffmpeg filter chain) — see docs/capcut-effects-reimplementation.md "Effects (applied to
+ * a single clip)". CapCut's effects are AE-style layer stacks driven by cubic-bezier curves;
+ * freecut reimplements the cheap ones that have faithful Canvas-2D + ffmpeg equivalents.
+ *
+ * Each effect is `{ type, params }` where `params` is a flat bag of numbers in documented
+ * ranges (mostly 0..1, matching CapCut's `effects_adjust_*`). The authoritative default params,
+ * ranges and labels live in EFFECT_CATALOG so the data model, the Inspector UI, the preview and
+ * the exporter all agree. The actual rendering math lives in shared/effects.ts (pure functions)
+ * so it stays unit-testable and shared between preview and export.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type ClipEffectType =
+  | 'kenBurns' // slow zoom/pan (CapCut "Zoom"/Ken Burns), effect #1
+  | 'shake' // seeded camera shake (LumiSShake), effect #2
+  | 'blur' // gaussian blur, effect #5
+  | 'vignette' // darkened edges, effect #8
+  | 'grain' // old-film grain + optional desaturation, effect #9
+  | 'blackWhite' // desaturate to B&W
+  | 'flash' // exposure strobe/flash, effect #4
+  | 'mirror' // horizontal mirror fold, effect #12 (simple mirror)
+
+export interface ClipEffect {
+  /** Stable id so the Inspector can key/patch/remove a specific instance. */
+  id: string
+  type: ClipEffectType
+  /** Flat numeric parameter bag; valid keys per type are documented in EFFECT_CATALOG. */
+  params: Record<string, number>
+}
+
+export interface EffectParamSpec {
+  key: string
+  label: string
+  min: number
+  max: number
+  step: number
+  default: number
+}
+
+export interface EffectCatalogEntry {
+  type: ClipEffectType
+  label: string
+  params: EffectParamSpec[]
+}
+
+/** Authoritative metadata for every effect: label + its tunable params (ranges/defaults).
+ *  Parameter semantics (how each maps to a Canvas-2D op and an ffmpeg filter) are implemented
+ *  in shared/effects.ts. Ranges follow CapCut's 0..1 `effects_adjust_*` convention where it
+ *  makes sense. */
+export const EFFECT_CATALOG: EffectCatalogEntry[] = [
+  {
+    type: 'kenBurns',
+    label: 'Zoom (Ken Burns)',
+    params: [
+      { key: 'intensity', label: 'Zoom amount', min: 0, max: 1, step: 0.01, default: 0.2 },
+      // direction: 0 = zoom in, 1 = zoom out (treated as a toggle, kept numeric for a uniform param bag)
+      { key: 'direction', label: 'Out (0=in,1=out)', min: 0, max: 1, step: 1, default: 0 }
+    ]
+  },
+  {
+    type: 'shake',
+    label: 'Camera shake',
+    params: [
+      { key: 'intensity', label: 'Intensity', min: 0, max: 1, step: 0.01, default: 0.4 },
+      { key: 'speed', label: 'Speed', min: 0, max: 1, step: 0.01, default: 0.5 },
+      { key: 'seed', label: 'Seed', min: 0, max: 99, step: 1, default: 7 }
+    ]
+  },
+  {
+    type: 'blur',
+    label: 'Blur (gaussian)',
+    params: [{ key: 'intensity', label: 'Amount', min: 0, max: 1, step: 0.01, default: 0.3 }]
+  },
+  {
+    type: 'vignette',
+    label: 'Vignette',
+    params: [{ key: 'intensity', label: 'Strength', min: 0, max: 1, step: 0.01, default: 0.5 }]
+  },
+  {
+    type: 'grain',
+    label: 'Old film / grain',
+    params: [
+      { key: 'intensity', label: 'Grain', min: 0, max: 1, step: 0.01, default: 0.3 },
+      { key: 'desaturate', label: 'Desaturate', min: 0, max: 1, step: 0.01, default: 0.4 }
+    ]
+  },
+  {
+    type: 'blackWhite',
+    label: 'Black & white',
+    params: [{ key: 'intensity', label: 'Amount', min: 0, max: 1, step: 0.01, default: 1 }]
+  },
+  {
+    type: 'flash',
+    label: 'Flash / strobe',
+    params: [
+      { key: 'intensity', label: 'Strength', min: 0, max: 1, step: 0.01, default: 0.6 },
+      { key: 'speed', label: 'Rate (Hz)', min: 0.5, max: 12, step: 0.5, default: 4 }
+    ]
+  },
+  {
+    type: 'mirror',
+    label: 'Mirror',
+    params: [
+      // 0 = mirror left half onto right, 1 = mirror right half onto left
+      { key: 'side', label: 'Side (0=L,1=R)', min: 0, max: 1, step: 1, default: 0 }
+    ]
+  }
+]
+
+/** Looks up an effect's catalog entry by type. */
+export function effectCatalogEntry(type: ClipEffectType): EffectCatalogEntry | undefined {
+  return EFFECT_CATALOG.find((e) => e.type === type)
+}
+
+/** Builds a fresh effect instance with the catalog's default params. `id` is caller-supplied
+ *  (uuid in the store; a fixed value in tests) so this stays pure/deterministic. */
+export function createEffect(type: ClipEffectType, id: string): ClipEffect {
+  const entry = effectCatalogEntry(type)
+  const params: Record<string, number> = {}
+  if (entry) for (const p of entry.params) params[p.key] = p.default
+  return { id, type, params }
+}
+
+/** Reads an effect param with a catalog default fallback, so rendering code never has to
+ *  guard against a missing/partial param bag. */
+export function effectParam(effect: ClipEffect, key: string): number {
+  const v = effect.params[key]
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  const entry = effectCatalogEntry(effect.type)
+  return entry?.params.find((p) => p.key === key)?.default ?? 0
+}
+
+/**
+ * Seeded camera-shake waveform, ported from CapCut's `LumiSShake`
+ * (docs/capcut-effects-reimplementation.md transition #10 / effect #2): a base sine plus a
+ * "random" wave that sums three sines at frequency ratios 2/3/5 with weights 0.5/0.32/0.18,
+ * each phase-shifted by a function of the seed. Deterministic and cheap — no noise texture —
+ * so the preview and the export produce the exact same displacement for a given (seed, t).
+ *
+ * Returns a normalized offset in roughly [-1, 1] for one axis; callers scale it by an
+ * amplitude in pixels. `phase` separates the x and y axes (CapCut uses per-channel phases).
+ *
+ * @param t       time in seconds
+ * @param seed    integer seed (stable across preview/export)
+ * @param freq    base frequency in Hz
+ * @param phase   phase offset (use 0 for x, ~1.7 for y to decorrelate the axes)
+ */
+export function shakeWave(t: number, seed: number, freq: number, phase: number): number {
+  const s = seed % 97
+  const base = Math.sin(Math.PI * 2 * t * freq + phase)
+  const r1 = Math.sin(Math.PI * 2 * t * freq * 2 + phase + (s % 7))
+  const r2 = Math.sin(Math.PI * 2 * t * freq * 3 + phase + (s % 11))
+  const r3 = Math.sin(Math.PI * 2 * t * freq * 5 + phase + (s % 13))
+  const random = r1 * 0.5 + r2 * 0.32 + r3 * 0.18
+  // 60/40 blend of the base sine and the summed-sine "random" wave, kept within [-1,1].
+  return base * 0.6 + random * 0.4
+}
+
 interface ClipBase {
   id: string
   trackId: string
@@ -84,6 +320,9 @@ interface ClipBase {
   /** Transition into this clip from the previous clip on the same track. */
   transitionIn?: Transition
   transform: ClipTransform
+  /** Per-clip visual effects, applied in order (preview + export). Optional/absent means none;
+   *  omitted entirely from serialized projects when empty, so old `.fcproj` files round-trip. */
+  effects?: ClipEffect[]
 }
 
 /** A speed value that takes effect at a given SOURCE-relative time (within [trimIn, trimOut]).
@@ -157,6 +396,15 @@ export function projectDuration(project: Project): number {
     }
   }
   return max
+}
+
+/** Zero-padded MM:SS clock (e.g. "00:00", "01:30", "90:00"). Shared by the timeline ruler/
+ *  readout and the preview's time display so every timestamp uses one consistent format. */
+export function formatMMSS(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 export function createEmptyProject(name: string): Project {

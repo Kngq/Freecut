@@ -1,4 +1,5 @@
 import { clipSpeedSegments, type Clip, type ClipTransform, type MediaAsset, type MediaClip, type Project, type Track } from './types'
+import { effectNeedsSubgraph, effectToFfmpegFilters, mirrorSubgraph, transitionToXfade } from './effects'
 
 export interface FfmpegPlan {
   inputs: string[] // -i arguments, in order; filter graph refers to them as [0:v], [1:v], etc.
@@ -205,7 +206,79 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
   function trimmedSegmentLabel(clip: MediaClip, asset: MediaAsset, finish: 'canvas' | 'native' = 'canvas'): string {
     const finishFilter = finish === 'native' ? `setsar=1,fps=${fps}` : scalePadFor()
     const base = buildBaseSegment(clip, asset, finishFilter)
-    return finish === 'canvas' ? applyCanvasTransform(base, clip) : base
+    const transformed = finish === 'canvas' ? applyCanvasTransform(base, clip) : base
+    const withEffects = applyEffectsChain(transformed, clip)
+    return applyRotateFlip(withEffects, clip, finish)
+  }
+
+  /**
+   * Applies the clip's static horizontal mirror (`flipH`) and 90°-step rotation (`rotation`)
+   * from its transform — the timeline toolbar's Mirror/Rotate buttons. Mirrors drawContain in
+   * Preview.tsx: flip first, then rotate about the center. For a primary ('canvas') clip the
+   * rotate output stays pinned to the canvas size (ow/oh) with black-filled corners, matching
+   * the preview; for an overlay ('native') clip the rotate keeps the clip's own dimensions so
+   * the later overlay composite still fits it correctly. No-op at the default (rotation 0,
+   * flipH false), so untouched clips emit identical output to before.
+   */
+  function applyRotateFlip(label: string, clip: MediaClip, finish: 'canvas' | 'native'): string {
+    const rotation = (((clip.transform.rotation ?? 0) % 360) + 360) % 360
+    const flipH = clip.transform.flipH ?? false
+    if (rotation === 0 && !flipH) return label
+    let current = label
+    if (flipH) {
+      const out = nextLabel('flip')
+      filters.push(`[${current}]hflip[${out}]`)
+      current = out
+    }
+    if (rotation !== 0) {
+      const out = nextLabel('rot')
+      const radians = (rotation * Math.PI) / 180
+      const sizeArgs = finish === 'canvas' ? `:ow=${width}:oh=${height}` : ''
+      filters.push(`[${current}]rotate=${radians.toFixed(6)}${sizeArgs}:fillcolor=black[${out}]`)
+      current = out
+    }
+    // Primary-track clips flow into concat/xfade, which reject a non-1 SAR ("SAR … do not
+    // match"); normalize it (and fps) once, same guard as the effect chain uses.
+    if (finish === 'canvas') {
+      const norm = nextLabel('rfnorm')
+      filters.push(`[${current}]setsar=1,fps=${fps}[${norm}]`)
+      current = norm
+    }
+    return current
+  }
+
+  /**
+   * Splices a clip's effect stack onto its already-finished (trimmed/transformed) video label,
+   * mirroring shared/effects.ts (the preview applies the same stack). Most effects are
+   * comma-joinable inline filters (effectToFfmpegFilters); mirror needs a labeled subgraph
+   * (mirrorSubgraph). Returns the final label — unchanged when the clip has no effects, so
+   * effect-free clips produce byte-identical output to before this feature.
+   */
+  function applyEffectsChain(label: string, clip: MediaClip): string {
+    const effects = clip.effects
+    if (!effects || effects.length === 0) return label
+    let current = label
+    for (const effect of effects) {
+      if (effectNeedsSubgraph(effect)) {
+        const out = nextLabel('fxmir')
+        const inter = { a: nextLabel('fxa'), b: nextLabel('fxb'), flipped: nextLabel('fxf') }
+        for (const line of mirrorSubgraph(effect, width, height, current, out, inter)) filters.push(line)
+        current = out
+      } else {
+        const inline = effectToFfmpegFilters(effect, width, height, fps)
+        if (inline.length === 0) continue
+        const out = nextLabel('fx')
+        filters.push(`[${current}]${inline.join(',')}[${out}]`)
+        current = out
+      }
+    }
+    // Geometry effects (shake/Ken Burns) scale to fractional pixel sizes, which leaves a
+    // non-1 SAR that breaks a downstream concat/xfade ("SAR … do not match"). Normalize SAR
+    // (and fps, for safety) once at the end of the chain. No-op if the chain emitted nothing.
+    if (current === label) return label
+    const normalized = nextLabel('fxnorm')
+    filters.push(`[${current}]setsar=1,fps=${fps}[${normalized}]`)
+    return normalized
   }
 
   function buildBaseSegment(clip: MediaClip, asset: MediaAsset, finishFilter: string): string {
@@ -380,7 +453,7 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
         if (clip.transitionIn && clip.transitionIn.duration > 0) {
           const d = Math.min(clip.transitionIn.duration, runningDuration, nextDuration)
           const offset = Math.max(runningDuration - d, 0)
-          const xfadeType = clip.transitionIn.type === 'dipToBlack' ? 'fadeblack' : 'fade'
+          const xfadeType = transitionToXfade(clip.transitionIn.type)
           filters.push(`[${chainLabel}][${nextSeg}]xfade=transition=${xfadeType}:duration=${d}:offset=${offset}[${out}]`)
           runningDuration = runningDuration + nextDuration - d
         } else {

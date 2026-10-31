@@ -202,24 +202,77 @@ input[type='number'] {
   margin: 4px 0 8px;
 }
 
-.asset-item {
-  position: relative;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  margin-bottom: 6px;
-  cursor: grab;
-  background: var(--bg-2);
+/* Media pool as a grid of square-ish thumbnail cards (like CapCut). Two columns that reflow with
+   the panel width via auto-fill + a minimum card size. */
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
 }
 
-.asset-item:hover {
+.asset-card {
+  cursor: grab;
+}
+
+.asset-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: #000;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+}
+
+.asset-card:hover .asset-thumb {
   border-color: var(--accent);
+}
+
+.asset-card.previewing .asset-thumb {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.asset-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.asset-duration {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.asset-card-name {
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .asset-item-remove {
   position: absolute;
   top: 4px;
-  right: 4px;
+  left: 4px;
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -233,20 +286,8 @@ input[type='number'] {
   font-size: 12px;
 }
 
-.asset-item:hover .asset-item-remove {
+.asset-card:hover .asset-item-remove {
   display: block;
-}
-
-.asset-item .name {
-  padding-right: 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.asset-item .meta {
-  color: var(--text-dim);
-  font-size: 11px;
 }
 
 .preview-area {
@@ -270,6 +311,21 @@ input[type='number'] {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Playhead / duration readout, centered under the preview (moved here from the timeline toolbar). */
+.preview-time {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: rgba(20, 24, 30, 0.6);
+  border-radius: 4px;
+  padding: 2px 8px;
+  pointer-events: none;
 }
 
 canvas.preview-canvas {
@@ -302,6 +358,80 @@ canvas.preview-canvas {
   left: 0;
 }
 
+.tl-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tl-spacer {
+  flex: 1;
+}
+
+.tl-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 6px;
+  background: var(--border);
+}
+
+/* CapCut-style icon button: icon-only, square, rounded hover/active highlight. */
+.tl-tool {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+}
+
+.tl-tool:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: #fff;
+}
+
+.tl-tool.active {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+
+.tl-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tl-tool:disabled:hover {
+  background: transparent;
+}
+
+/* Hover tooltip: dark pill below the button showing "Name (shortcut)", like the reference. */
+.tl-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: #0d0d12;
+  color: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+  z-index: 20;
+}
+
+.tl-tool:hover:not(:disabled) .tl-tooltip {
+  opacity: 1;
+}
+
 .timeline-body {
   position: relative;
 }
@@ -326,7 +456,7 @@ canvas.preview-canvas {
 .track-row {
   display: flex;
   border-bottom: 1px solid var(--border);
-  height: 56px;
+  height: 92px;
 }
 
 .track-label {
@@ -359,13 +489,87 @@ canvas.preview-canvas {
   position: absolute;
   top: 4px;
   bottom: 4px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  padding: 3px 6px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
   overflow: hidden;
   white-space: nowrap;
   cursor: grab;
   font-size: 11px;
+}
+
+/* The clip's own text label (when there's no filmstrip, e.g. text/audio clips). */
+.clip .clip-header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  color: #fff;
+  pointer-events: none;
+}
+
+.clip .clip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip .clip-transition-badge {
+  font-size: 9px;
+  opacity: 0.85;
+}
+
+/* Filmstrip of thumbnail tiles across the TOP of the clip body; the header draws over it and the
+   waveform sits below. Height is set inline (TRACK_COVER_HEIGHT). Tiles are absolutely positioned
+   (virtualized) so only the on-screen slice is rendered. */
+.clip .clip-filmstrip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.clip .clip-tile {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+
+/* CapCut-style filmstrip clip: a thicker colored border framing the thumbnails. */
+.clip.has-cover {
+  border-color: rgba(120, 190, 200, 0.95);
+  border-width: 2px;
+}
+
+/* When a cover is present, the header becomes a solid colored bar spanning the full top of the
+   clip (a "top border" strip) that the filename/timecode sits on — matching CapCut. */
+.clip.has-cover .clip-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-width: 100%;
+  background: rgba(120, 190, 200, 0.95);
+  color: #0c1416;
+  font-weight: 600;
+  padding: 2px 6px;
+}
+
+.clip.has-cover .clip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Waveform canvas pinned to the bottom edge of the clip, over the filmstrip. `left` and `width`
+   are set inline (the virtualized visible slice); only `bottom` is fixed here. */
+.clip .clip-waveform {
+  position: absolute;
+  bottom: 0;
+  z-index: 1;
+  display: block;
+  pointer-events: none;
 }
 
 .clip.video,
@@ -390,6 +594,7 @@ canvas.preview-canvas {
   top: 0;
   bottom: 0;
   width: 6px;
+  z-index: 3;
   cursor: ew-resize;
 }
 
@@ -437,6 +642,61 @@ canvas.preview-canvas {
   color: var(--text-dim);
   font-size: 12px;
   padding: 12px;
+}
+
+.fx-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.fx-card {
+  display: flex;
+  align-items: flex-end;
+  aspect-ratio: 16 / 10;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--bg-2) 0%, var(--bg-3) 100%);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fx-card:hover {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--bg-3) 0%, #45455a 100%);
+}
+
+.fx-card.active {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+.fx-card-label {
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.fx-applied-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  font-size: 12px;
+}
+
+.fx-applied-row button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
 }
 
 .progress-bar {

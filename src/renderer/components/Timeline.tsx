@@ -1,10 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
-import { projectDuration, type Clip, type MediaAsset, type Track } from '@shared/types'
+import { formatMMSS, projectDuration, type Clip, type MediaAsset, type ThumbnailCover, type Track } from '@shared/types'
 import { ASSET_DRAG_MIME, assetsFromPaths, droppedFilePaths, isMediaDrag } from '../media'
 
 /** Width of the sticky track label column; lanes and the ruler's 0s mark start after it. */
 const LABEL_WIDTH = 90
+
+/** Clip decoration heights. Tracks are tall enough (see .track-row in styles.css) to fit the
+ *  filmstrip thumbnails on top and an audio waveform strip below them without overlap. */
+const TRACK_COVER_HEIGHT = 60 // filmstrip thumbnail row height
+const TRACK_VIDEO_WAVE_HEIGHT = 24 // waveform strip under a video clip's thumbnails
+const TRACK_AUDIO_WAVE_HEIGHT = 56 // taller waveform for a standalone audio clip
 
 interface DragState {
   clipId: string
@@ -27,6 +33,215 @@ function clipClassName(clip: Clip, track: Track): string {
   return track.type === 'audio' ? 'audio' : 'video'
 }
 
+/** Formats seconds as HH:MM:SS:FF (frames at 30fps), the CapCut-style clip duration readout. */
+function formatTimecode(seconds: number, fps = 30): string {
+  const total = Math.max(0, seconds)
+  const whole = Math.floor(total)
+  const frames = Math.round((total - whole) * fps) % fps
+  const hh = Math.floor(whole / 3600)
+  const mm = Math.floor((whole % 3600) / 60)
+  const ss = whole % 60
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(hh)}:${p(mm)}:${p(ss)}:${p(frames)}`
+}
+
+/** Draws a clip's audio waveform as a symmetric bar graph on a canvas. VIRTUALIZED: the canvas
+ *  only spans the visible slice of the clip ([visibleStart, visibleEnd) in clip-local px), so a
+ *  clip that's hundreds of thousands of px wide at high zoom never exceeds the browser's max
+ *  canvas size (which would blank it). Peak sampling still maps against the FULL clip width so
+ *  the waveform is positionally correct. Redraws on any size/scroll/peak/trim change. */
+function WaveformCanvas({
+  peaks,
+  fullWidth,
+  height,
+  startFrac,
+  endFrac,
+  visibleStart,
+  visibleEnd
+}: {
+  peaks: number[]
+  fullWidth: number
+  height: number
+  startFrac: number
+  endFrac: number
+  visibleStart: number
+  visibleEnd: number
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null)
+  const segLeft = Math.max(0, Math.floor(visibleStart))
+  const segWidth = Math.max(1, Math.ceil(visibleEnd) - segLeft)
+
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    const w = Math.max(1, segWidth)
+    const h = Math.max(1, Math.floor(height))
+    canvas.width = w * dpr
+    canvas.height = h * dpr
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, w, h)
+    if (peaks.length === 0 || w < 2 || fullWidth < 2) return
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
+    const mid = h / 2
+    const span = Math.max(1e-6, endFrac - startFrac)
+    // Each local column x maps to an absolute clip-local pixel (segLeft + x), then to a source
+    // fraction across the full clip width, then to a peak bucket.
+    for (let x = 0; x < w; x++) {
+      const frac = startFrac + ((segLeft + x) / fullWidth) * span
+      const idx = Math.min(peaks.length - 1, Math.max(0, Math.floor(frac * peaks.length)))
+      const amp = peaks[idx]
+      const barH = Math.max(1, amp * (h - 2))
+      ctx.fillRect(x, mid - barH / 2, 1, barH)
+    }
+  }, [peaks, fullWidth, height, startFrac, endFrac, segLeft, segWidth])
+
+  return <canvas ref={ref} className="clip-waveform" style={{ left: segLeft, width: segWidth, height }} />
+}
+
+/** A filmstrip of thumbnail frames sliced from an asset's sprite sheet, tiled edge-to-edge (no
+ *  gaps) across the clip. VIRTUALIZED: only the tiles overlapping the visible scroll window are
+ *  rendered, so an extremely wide clip (high zoom) stays cheap and never hits the browser's
+ *  wide-element paint limit. Each tile shows a distinct frame chosen by its position within the
+ *  clip's trimmed source window, so zooming in reveals more frames. */
+function FilmstripTiles({
+  cover,
+  width,
+  height,
+  startFrac,
+  endFrac,
+  visibleStart,
+  visibleEnd
+}: {
+  cover: ThumbnailCover
+  width: number
+  height: number
+  startFrac: number
+  endFrac: number
+  /** Visible x-range within the clip (clip-local px, already clamped to [0, width]). */
+  visibleStart: number
+  visibleEnd: number
+}) {
+  const url = window.api.fileUrl(cover.path)
+  const frames = Math.max(1, cover.frames)
+  const aspect = cover.frameWidth > 0 && cover.frameHeight > 0 ? cover.frameWidth / cover.frameHeight : 16 / 9
+  const tileW = Math.max(16, Math.round(height * aspect))
+  const tileCount = Math.max(1, Math.ceil(width / tileW))
+  const span = Math.max(1e-6, endFrac - startFrac)
+
+  // Only emit tiles whose [x, x+tileW) intersects the visible window.
+  const firstTile = Math.max(0, Math.floor(visibleStart / tileW))
+  const lastTile = Math.min(tileCount - 1, Math.ceil(visibleEnd / tileW))
+
+  const tiles = []
+  for (let i = firstTile; i <= lastTile; i++) {
+    const frac = startFrac + ((i + 0.5) / tileCount) * span
+    const frameIdx = Math.min(frames - 1, Math.max(0, Math.floor(frac * frames)))
+    tiles.push(
+      <div
+        key={i}
+        className="clip-tile"
+        style={{
+          left: i * tileW,
+          width: tileW,
+          backgroundImage: `url(${url})`,
+          backgroundSize: `${frames * tileW}px 100%`,
+          backgroundPosition: `${-frameIdx * tileW}px center`,
+          backgroundRepeat: 'no-repeat'
+        }}
+      />
+    )
+  }
+  return (
+    <div className="clip-filmstrip" style={{ height }}>
+      {tiles}
+    </div>
+  )
+}
+
+/** Thin SVG wrapper matching the media-bin tab icons (same stroke style as CapCut's toolbar). */
+function Icon({ children }: { children: React.ReactNode }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+      {children}
+    </svg>
+  )
+}
+
+// CapCut-style glyphs, kept minimal and recognizable at 18px.
+const IconUndo = (
+  <Icon>
+    <path d="M9 7H16a4 4 0 0 1 0 8h-3" />
+    <path d="M9 7 5.5 10.5 9 14" />
+  </Icon>
+)
+const IconRedo = (
+  <Icon>
+    <path d="M15 7H8a4 4 0 0 0 0 8h3" />
+    <path d="M15 7l3.5 3.5L15 14" />
+  </Icon>
+)
+const IconSplit = (
+  <Icon>
+    <line x1="12" y1="3" x2="12" y2="21" strokeDasharray="2 2.5" />
+    <path d="M7 6v12M7 6l-2 2M7 6l2 2" />
+    <path d="M17 6v12M17 18l-2-2M17 18l2-2" />
+  </Icon>
+)
+const IconDelete = (
+  <Icon>
+    <path d="M5 7h14" />
+    <path d="M9 7V5h6v2" />
+    <path d="M7 7l1 13h8l1-13" />
+  </Icon>
+)
+const IconMirror = (
+  <Icon>
+    <line x1="12" y1="3" x2="12" y2="21" strokeDasharray="2 2.5" />
+    <path d="M9 7l-4 5 4 5z" />
+    <path d="M15 7l4 5-4 5z" />
+  </Icon>
+)
+const IconRotate = (
+  <Icon>
+    <path d="M4 12a8 8 0 1 1 2.3 5.6" />
+    <path d="M4 20v-4h4" />
+  </Icon>
+)
+
+interface ToolButtonProps {
+  icon: React.ReactNode
+  label: string
+  shortcut?: string
+  active?: boolean
+  disabled?: boolean
+  onClick: () => void
+}
+
+/** One CapCut-style icon button with a hover tooltip showing the action name and its shortcut
+ *  (e.g. "Undo (⌘Z)"), matching the reference screenshot. Icon-only; the label lives in the
+ *  tooltip and the title attribute (for accessibility). */
+function ToolButton({ icon, label, shortcut, active, disabled, onClick }: ToolButtonProps) {
+  return (
+    <button
+      className={`tl-tool ${active ? 'active' : ''}`}
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={label}
+      title={shortcut ? `${label} (${shortcut})` : label}
+    >
+      {icon}
+      <span className="tl-tooltip">
+        {label}
+        {shortcut ? ` (${shortcut})` : ''}
+      </span>
+    </button>
+  )
+}
+
 export default function Timeline() {
   const project = useProjectStore((s) => s.project)
   const pxPerSecond = useProjectStore((s) => s.pxPerSecond)
@@ -40,16 +255,66 @@ export default function Timeline() {
   const setZoom = useProjectStore((s) => s.setZoom)
   const addAsset = useProjectStore((s) => s.addAsset)
   const addMediaClipToTrack = useProjectStore((s) => s.addMediaClipToTrack)
+  const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
+  const removeClip = useProjectStore((s) => s.removeClip)
+  const rotateClip = useProjectStore((s) => s.rotateClip)
+  const toggleClipFlipH = useProjectStore((s) => s.toggleClipFlipH)
+  const undo = useProjectStore((s) => s.undo)
+  const redo = useProjectStore((s) => s.redo)
+  const canUndo = useProjectStore((s) => s.past.length > 0)
+  const canRedo = useProjectStore((s) => s.future.length > 0)
 
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
   const trackRowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const [trim, setTrim] = useState<TrimState | null>(null)
   const [dropTrackId, setDropTrackId] = useState<string | null>(null)
+  // Available width of the scroll container, tracked so the timeline can stretch to fill it
+  // when the content is shorter than the panel (and still scroll when it's longer).
+  const [wrapWidth, setWrapWidth] = useState(0)
+  // Horizontal scroll offset of the timeline, tracked so clip decorations (filmstrip, waveform)
+  // can render only the slice that's actually on screen — essential at high zoom, where a clip
+  // can be hundreds of thousands of pixels wide (a single canvas/background that large fails to
+  // paint, and one tile per frame would be tens of thousands of DOM nodes).
+  const [scrollLeft, setScrollLeft] = useState(0)
+
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const update = () => {
+      setWrapWidth(el.clientWidth)
+      setScrollLeft(el.scrollLeft)
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    el.addEventListener('scroll', update, { passive: true })
+    return () => {
+      observer.disconnect()
+      el.removeEventListener('scroll', update)
+    }
+  }, [])
 
   const duration = useMemo(() => Math.max(projectDuration(project), 10), [project])
-  const totalWidth = duration * pxPerSecond + 200
+  const contentWidth = duration * pxPerSecond + 200
+  // Stretch to the full panel width when the content doesn't already overflow it.
+  const totalWidth = Math.max(contentWidth, wrapWidth)
+
+  // Minimum zoom: the whole project must always occupy at least half the visible timeline,
+  // regardless of its length. laneWidth is the pixels available after the sticky label column;
+  // half of that divided by the duration gives the px/second floor. Falls back to the store's
+  // own floor (10) until the container has been measured.
+  const laneWidth = Math.max(0, wrapWidth - LABEL_WIDTH)
+  const minPxPerSecond = laneWidth > 0 ? Math.max(1, (laneWidth / 2) / duration) : 10
+  const maxPxPerSecond = 400
+
+  // Keep the current zoom at or above the dynamic floor (e.g. after a longer clip is added, or
+  // the panel is resized smaller). Only pushes up, never fights a user zooming in.
+  useEffect(() => {
+    if (pxPerSecond < minPxPerSecond) setZoom(minPxPerSecond)
+  }, [minPxPerSecond, pxPerSecond, setZoom])
 
   function timeAt(clientX: number): number {
     const rect = bodyRef.current?.getBoundingClientRect()
@@ -104,8 +369,21 @@ export default function Timeline() {
     }
   }
 
-  function onRulerClick(e: React.MouseEvent) {
+  /** Press-and-drag on the ruler scrubs the playhead: it jumps to the pointer on mousedown and
+   *  then follows the cursor until release (a plain click is just the degenerate zero-move case). */
+  function onRulerPointerDown(e: React.MouseEvent) {
+    e.preventDefault()
     setPlayhead(timeAt(e.clientX))
+
+    function onMove(ev: MouseEvent) {
+      setPlayhead(timeAt(ev.clientX))
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   function onClipPointerDown(e: React.MouseEvent, clip: Clip, track: Track) {
@@ -206,48 +484,120 @@ export default function Timeline() {
     const isDraggingThis = drag?.clipId === clip.id
     const left = isDraggingThis ? drag.clipStartPx + drag.dx : clip.start * pxPerSecond
     const width = Math.max(clip.duration * pxPerSecond, 4)
-    const label = clip.kind === 'text' ? clip.text : track.name
+
+    const asset = clip.kind === 'media' ? project.assets.find((a) => a.id === clip.assetId) : undefined
+    const name = clip.kind === 'text' ? clip.text : asset?.name ?? track.name
+    const headerLabel = clip.kind === 'text' ? clip.text : `${name}  ${formatTimecode(clip.duration)}`
+
+    // The portion of the source this clip shows, as fractions of the full source duration —
+    // used to crop the waveform to the trimmed window so it tracks trimming.
+    let startFrac = 0
+    let endFrac = 1
+    if (clip.kind === 'media' && asset && asset.duration > 0) {
+      startFrac = Math.min(1, Math.max(0, clip.trimIn / asset.duration))
+      endFrac = Math.min(1, Math.max(startFrac + 1e-4, clip.trimOut / asset.duration))
+    }
+
+    // A filmstrip of distinct frames sliced from the asset's sprite sheet, tiled edge-to-edge
+    // (no gaps) across the clip. Rendered as discrete tiles so it scales to any zoom without the
+    // wide-background painting failure, and shows more frames the further you zoom in.
+    const hasCover = clip.kind === 'media' && track.type !== 'audio' && !!asset?.cover
+    const hasWaveform = clip.kind === 'media' && !!asset?.waveform && asset.waveform.peaks.length > 0
+    const coverHeight = track.type === 'audio' ? 0 : TRACK_COVER_HEIGHT
+
+    // Visible slice of this clip in clip-local px (what overlaps the scrolled viewport). Both the
+    // filmstrip and waveform render only this slice, so an enormous clip at high zoom stays cheap
+    // and never overflows a canvas/element size limit. A small margin pre-renders just offscreen.
+    const VIRT_MARGIN = 256
+    const clipBodyLeft = LABEL_WIDTH + left
+    const visibleStart = Math.max(0, Math.min(width, scrollLeft - clipBodyLeft - VIRT_MARGIN))
+    const visibleEnd = Math.max(0, Math.min(width, scrollLeft + wrapWidth - clipBodyLeft + VIRT_MARGIN))
+    const anyVisible = visibleEnd > visibleStart
 
     return (
       <div
         key={clip.id}
-        className={`clip ${clipClassName(clip, track)} ${selectedClipId === clip.id ? 'selected' : ''}`}
+        className={`clip ${clipClassName(clip, track)} ${hasCover ? 'has-cover' : ''} ${selectedClipId === clip.id ? 'selected' : ''}`}
         style={{ left, width, zIndex: isDraggingThis ? 10 : 1 }}
         onMouseDown={(e) => onClipPointerDown(e, clip, track)}
-        title={label}
+        title={clip.kind === 'text' ? clip.text : `${name} · ${clip.duration.toFixed(1)}s`}
       >
-        {track.type !== 'audio' && <div className="trim-handle left" onMouseDown={(e) => onTrimPointerDown(e, clip, 'start')} />}
-        {clip.transitionIn && track.type === 'video' && (
-          <span style={{ position: 'absolute', left: 0, top: 0, fontSize: 9, opacity: 0.8 }}>⤬</span>
+        {hasCover && anyVisible && (
+          <FilmstripTiles
+            cover={asset!.cover!}
+            width={width}
+            height={coverHeight}
+            startFrac={startFrac}
+            endFrac={endFrac}
+            visibleStart={visibleStart}
+            visibleEnd={visibleEnd}
+          />
         )}
-        <span>{label}</span>
+        <div className="clip-header">
+          {clip.transitionIn && track.type === 'video' && <span className="clip-transition-badge">⤬</span>}
+          <span className="clip-title">{headerLabel}</span>
+        </div>
+        {hasWaveform && anyVisible && (
+          <WaveformCanvas
+            peaks={asset!.waveform!.peaks}
+            fullWidth={width}
+            height={track.type === 'audio' ? TRACK_AUDIO_WAVE_HEIGHT : TRACK_VIDEO_WAVE_HEIGHT}
+            startFrac={startFrac}
+            endFrac={endFrac}
+            visibleStart={visibleStart}
+            visibleEnd={visibleEnd}
+          />
+        )}
+        {track.type !== 'audio' && <div className="trim-handle left" onMouseDown={(e) => onTrimPointerDown(e, clip, 'start')} />}
         {track.type !== 'audio' && <div className="trim-handle right" onMouseDown={(e) => onTrimPointerDown(e, clip, 'end')} />}
       </div>
     )
   }
 
+  // Adaptive ruler ticks. Pick the smallest "nice" step (in seconds) that keeps tick labels at
+  // least MIN_TICK_PX apart at the current zoom, choosing from a ladder that runs from sub-second
+  // all the way up to whole minutes. Once the step reaches a minute or more, labels switch to a
+  // m:ss / Nm format so a long, zoomed-out timeline reads in minutes instead of huge second counts.
+  const MIN_TICK_PX = 64
+  const STEP_LADDER = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
+  const tickStep = STEP_LADDER.find((step) => step * pxPerSecond >= MIN_TICK_PX) ?? STEP_LADDER[STEP_LADDER.length - 1]
   const ticks: number[] = []
-  const tickStep = pxPerSecond < 40 ? 5 : pxPerSecond < 100 ? 2 : 1
   for (let s = 0; s <= duration + tickStep; s += tickStep) ticks.push(s)
 
+  /** Ruler tick label — always zero-padded MM:SS, matching the position/duration readout. */
+  function tickLabel(seconds: number): string {
+    return formatMMSS(seconds)
+  }
+
   return (
-    <div className="timeline-wrap">
+    <div className="timeline-wrap" ref={wrapRef}>
       <div className="timeline-toolbar">
+        <div className="tl-tools">
+          <ToolButton icon={IconUndo} label="Undo" shortcut="⌘Z" disabled={!canUndo} onClick={undo} />
+          <ToolButton icon={IconRedo} label="Redo" shortcut="⌘⇧Z" disabled={!canRedo} onClick={redo} />
+          <span className="tl-sep" />
+          <ToolButton icon={IconSplit} label="Split" shortcut="⌘B" disabled={!selectedClipId} onClick={splitClipAtPlayhead} />
+          <ToolButton icon={IconDelete} label="Delete" shortcut="⌫" disabled={!selectedClipId} onClick={() => selectedClipId && removeClip(selectedClipId)} />
+          <span className="tl-sep" />
+          <ToolButton icon={IconMirror} label="Mirror" shortcut="⌘M" disabled={!selectedClipId} onClick={() => selectedClipId && toggleClipFlipH(selectedClipId)} />
+          <ToolButton icon={IconRotate} label="Flip" shortcut="⌘⇧F" disabled={!selectedClipId} onClick={() => selectedClipId && rotateClip(selectedClipId, 90)} />
+        </div>
+        <span className="tl-spacer" />
         <span style={{ color: 'var(--text-dim)' }}>Zoom</span>
         <input
           type="range"
-          min={10}
-          max={300}
+          min={minPxPerSecond}
+          max={maxPxPerSecond}
+          step="any"
           value={pxPerSecond}
-          onChange={(e) => setZoom(Number(e.target.value))}
+          onChange={(e) => setZoom(Math.max(minPxPerSecond, Number(e.target.value)))}
         />
-        <span style={{ color: 'var(--text-dim)' }}>{playhead.toFixed(2)}s / {duration.toFixed(1)}s</span>
       </div>
       <div className="timeline-body" ref={bodyRef} style={{ width: totalWidth }}>
-        <div className="ruler" onClick={onRulerClick}>
+        <div className="ruler" onMouseDown={onRulerPointerDown}>
           {ticks.map((s) => (
             <div key={s} className="ruler-tick" style={{ left: LABEL_WIDTH + s * pxPerSecond }}>
-              {s}s
+              {tickLabel(s)}
             </div>
           ))}
         </div>

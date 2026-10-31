@@ -1,5 +1,101 @@
 import { describe, expect, it } from 'vitest'
-import { atempoFactors, piecewiseLinearExpr } from './ffmpegGraph'
+import { atempoFactors, buildFfmpegPlan, piecewiseLinearExpr } from './ffmpegGraph'
+import { createEffect, defaultTransform, type ClipTransform, type MediaClip, type Project, type TransitionType } from './types'
+
+/** Minimal single-video-track project with two clips, so transitions (which need a preceding
+ *  clip) and effects can both be exercised through the real plan builder. */
+function twoClipProject(opts: { transition?: TransitionType; effectsOnSecond?: MediaClip['effects']; transformOnSecond?: ClipTransform } = {}): Project {
+  const base: Omit<MediaClip, 'id' | 'start'> = {
+    kind: 'media',
+    trackId: 'v1',
+    duration: 4,
+    assetId: 'a1',
+    trimIn: 0,
+    trimOut: 4,
+    volume: 1,
+    muted: false,
+    speed: 1,
+    reversed: false,
+    frozen: false,
+    transform: defaultTransform()
+  }
+  const clip1: MediaClip = { ...base, id: 'c1', start: 0 }
+  const clip2: MediaClip = {
+    ...base,
+    id: 'c2',
+    start: 4,
+    transitionIn: opts.transition ? { type: opts.transition, duration: 1 } : undefined,
+    effects: opts.effectsOnSecond,
+    transform: opts.transformOnSecond ?? defaultTransform()
+  }
+  return {
+    id: 'p',
+    name: 'test',
+    canvas: { width: 1080, height: 1920, fps: 30 },
+    tracks: [{ id: 'v1', type: 'video', name: 'Video 1', clips: [clip1, clip2], muted: false, hidden: false }],
+    assets: [{ id: 'a1', path: '/tmp/a.mp4', kind: 'video', name: 'a.mp4', duration: 10, hasAudio: false }],
+    createdAt: 0,
+    updatedAt: 0
+  }
+}
+
+describe('buildFfmpegPlan — transitions', () => {
+  it('emits the mapped xfade transition name for a new transition type', () => {
+    const plan = buildFfmpegPlan(twoClipProject({ transition: 'slideLeft' }))
+    expect(plan.filterComplex).toContain('xfade=transition=slideleft')
+  })
+
+  it('still emits plain concat when there is no transition', () => {
+    const plan = buildFfmpegPlan(twoClipProject())
+    expect(plan.filterComplex).toContain('concat=n=2:v=1:a=0')
+    expect(plan.filterComplex).not.toContain('xfade')
+  })
+})
+
+describe('buildFfmpegPlan — effects', () => {
+  it('splices an inline effect filter into the clip chain', () => {
+    const vignette = createEffect('vignette', 'fx-vig')
+    const plan = buildFfmpegPlan(twoClipProject({ effectsOnSecond: [vignette] }))
+    expect(plan.filterComplex).toContain('vignette=angle=')
+  })
+
+  it('emits a mirror subgraph (split/hflip/hstack) for the mirror effect', () => {
+    const mirror = createEffect('mirror', 'fx-mir')
+    const plan = buildFfmpegPlan(twoClipProject({ effectsOnSecond: [mirror] }))
+    expect(plan.filterComplex).toContain('hflip')
+    expect(plan.filterComplex).toContain('hstack')
+  })
+
+  it('produces no effect filters when a clip has no effects', () => {
+    const plan = buildFfmpegPlan(twoClipProject())
+    expect(plan.filterComplex).not.toContain('vignette')
+    expect(plan.filterComplex).not.toContain('gblur')
+  })
+})
+
+describe('buildFfmpegPlan — rotate/flip (mirror)', () => {
+  it('emits hflip for a horizontally-flipped clip', () => {
+    const plan = buildFfmpegPlan(twoClipProject({ transformOnSecond: { ...defaultTransform(), flipH: true } }))
+    expect(plan.filterComplex).toContain('hflip')
+  })
+
+  it('emits a rotate filter pinned to the canvas size for a rotated clip', () => {
+    const plan = buildFfmpegPlan(twoClipProject({ transformOnSecond: { ...defaultTransform(), rotation: 90 } }))
+    expect(plan.filterComplex).toMatch(/rotate=[\d.]+:ow=1080:oh=1920/)
+  })
+
+  it('emits both hflip and rotate when a clip is mirrored and rotated', () => {
+    const plan = buildFfmpegPlan(twoClipProject({ transformOnSecond: { ...defaultTransform(), rotation: 180, flipH: true } }))
+    expect(plan.filterComplex).toContain('hflip')
+    expect(plan.filterComplex).toContain('rotate=')
+  })
+
+  it('emits neither at the default transform (rotation 0, no flip)', () => {
+    const plan = buildFfmpegPlan(twoClipProject())
+    expect(plan.filterComplex).not.toContain('hflip')
+    expect(plan.filterComplex).not.toContain('rotate=')
+  })
+})
 
 /** Evaluates the tiny subset of ffmpeg expression syntax `piecewiseLinearExpr` emits
  *  (if/lt + arithmetic) so the generated string can be checked against the same math
