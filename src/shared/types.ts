@@ -122,6 +122,28 @@ export function fontCatalogEntry(id: string | undefined): FontCatalogEntry {
   return FONT_CATALOG.find((f) => f.id === id) ?? FONT_CATALOG[0]
 }
 
+/** Output canvas aspect-ratio presets. Width/height are the export resolution; the preview
+ *  canvas and ffmpeg both read project.canvas, so switching here changes both. */
+export interface AspectPreset {
+  id: string
+  label: string
+  width: number
+  height: number
+}
+
+export const ASPECT_PRESETS: AspectPreset[] = [
+  { id: 'portrait', label: '9:16 Portrait', width: 1080, height: 1920 },
+  { id: 'landscape', label: '16:9 Landscape', width: 1920, height: 1080 },
+  { id: 'square', label: '1:1 Square', width: 1080, height: 1080 },
+  { id: 'classic', label: '4:3 Classic', width: 1440, height: 1080 },
+  { id: 'cinema', label: '21:9 Cinema', width: 2560, height: 1080 }
+]
+
+/** Finds the preset matching a canvas's exact resolution, or null for a custom size. */
+export function aspectPresetFor(width: number, height: number): AspectPreset | null {
+  return ASPECT_PRESETS.find((p) => p.width === width && p.height === height) ?? null
+}
+
 export interface TransformKeyframe {
   time: number // clip-local timeline seconds, 0..effective clip duration
   x: number

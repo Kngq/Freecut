@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
 import { useRecentsStore } from '../state/recentsStore'
+import { ASPECT_PRESETS, aspectPresetFor } from '@shared/types'
 import type { ExportProgress } from '@shared/ipc'
 
 export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
@@ -8,6 +9,7 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
   const filePath = useProjectStore((s) => s.filePath)
   const dirty = useProjectStore((s) => s.dirty)
   const addTextClipToTrack = useProjectStore((s) => s.addTextClipToTrack)
+  const setCanvasSize = useProjectStore((s) => s.setCanvasSize)
   const playhead = useProjectStore((s) => s.playhead)
   const newProject = useProjectStore((s) => s.newProject)
   const setProject = useProjectStore((s) => s.setProject)
@@ -80,6 +82,27 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
       <button onClick={handleSave}>Save</button>
       <button onClick={handleSaveAs}>Save As</button>
       <button onClick={addText}>+ Text</button>
+      <span style={{ width: 1, background: 'var(--border)', height: 20, margin: '0 4px' }} />
+      <label style={{ color: 'var(--text-dim)', fontSize: 12 }}>Aspect</label>
+      <select
+        value={aspectPresetFor(project.canvas.width, project.canvas.height)?.id ?? 'custom'}
+        title="Output aspect ratio / resolution"
+        onChange={(e) => {
+          const preset = ASPECT_PRESETS.find((p) => p.id === e.target.value)
+          if (preset) setCanvasSize(preset.width, preset.height)
+        }}
+      >
+        {!aspectPresetFor(project.canvas.width, project.canvas.height) && (
+          <option value="custom">
+            Custom ({project.canvas.width}×{project.canvas.height})
+          </option>
+        )}
+        {ASPECT_PRESETS.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+          </option>
+        ))}
+      </select>
       <span className="spacer" />
       {exporting && exportState && (
         <>

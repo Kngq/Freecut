@@ -96,6 +96,8 @@ interface ProjectState {
   selectClip: (clipId: string | null) => void
   /** Sets (or clears, with null) the asset previewed standalone in the Preview panel. */
   setPreviewAsset: (assetId: string | null) => void
+  /** Changes the output canvas resolution (aspect ratio). Keeps fps. */
+  setCanvasSize: (width: number, height: number) => void
   setPlayhead: (t: number) => void
   setIsPlaying: (v: boolean) => void
   setZoom: (pxPerSecond: number) => void
@@ -766,6 +768,12 @@ export const useProjectStore = create<ProjectState>((set) => ({
 
   selectClip: (clipId) => set((s) => ({ selectedClipId: clipId, previewAssetId: clipId ? null : s.previewAssetId })),
   setPreviewAsset: (assetId) => set({ previewAssetId: assetId, isPlaying: false }),
+  setCanvasSize: (width, height) =>
+    set((s) => ({
+      project: touch({ ...s.project, canvas: { ...s.project.canvas, width, height } }),
+      dirty: true,
+      ...recordPast(s)
+    })),
   setPlayhead: (t) => set({ playhead: Math.max(0, t), previewAssetId: null }),
   setIsPlaying: (v) => set({ isPlaying: v }),
   setZoom: (pxPerSecond) => set({ pxPerSecond: Math.min(Math.max(pxPerSecond, 1), 400) })
