@@ -22,6 +22,22 @@ export interface ExportResult {
   error?: string
 }
 
+/** One transcribed caption line, in timeline seconds. */
+export interface CaptionSegment {
+  start: number
+  end: number
+  text: string
+}
+
+/** Whether local captioning can run right now (whisper.cpp binary + downloaded model). */
+export interface CaptionStatus {
+  binaryAvailable: boolean
+  binaryPath?: string
+  modelDownloaded: boolean
+  modelName: string
+  installHint?: string
+}
+
 export interface FreecutApi {
   openMediaDialog(): Promise<string[]>
   probeMedia(path: string): Promise<ProbeResult | null>
@@ -45,6 +61,10 @@ export interface FreecutApi {
   exportDialog(defaultName: string): Promise<string | null>
   exportProject(project: Project, outputPath: string): Promise<ExportResult>
   onExportProgress(cb: (progress: ExportProgress) => void): () => void
+  /** Local auto-caption (whisper.cpp): status, one-time model download, and transcription. */
+  captionStatus(): Promise<CaptionStatus>
+  downloadCaptionModel(): Promise<{ ok: boolean; error?: string }>
+  transcribeToCaptions(path: string): Promise<{ ok: boolean; segments?: CaptionSegment[]; error?: string }>
   fileUrl(path: string): string
   /** Absolute path of a File from a drag-and-drop (File.path was removed in Electron 32). */
   getPathForFile(file: File): string

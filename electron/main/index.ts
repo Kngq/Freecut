@@ -6,6 +6,7 @@ import { probeMedia } from './probe'
 import { ensurePreviewProxy } from './proxy'
 import { ensureVideoCover } from './thumbnails'
 import { ensureWaveform } from './waveform'
+import { captionStatus, downloadCaptionModel, transcribeToCaptions } from './transcribe'
 import { exportProject } from './export'
 import { handleMediaRequest } from './mediaProtocol'
 import { FILE_EXTENSION, type Project } from '@shared/types'
@@ -90,6 +91,18 @@ ipcMain.handle('media:thumbnails', async (_e, filePath: string) => {
 
 ipcMain.handle('media:waveform', async (_e, filePath: string) => {
   return ensureWaveform(filePath)
+})
+
+ipcMain.handle('caption:status', async () => {
+  return captionStatus()
+})
+
+ipcMain.handle('caption:download', async () => {
+  return downloadCaptionModel()
+})
+
+ipcMain.handle('caption:transcribe', async (_e, filePath: string) => {
+  return transcribeToCaptions(filePath)
 })
 
 ipcMain.handle('project:saveDialog', async (_e, defaultName: string) => {

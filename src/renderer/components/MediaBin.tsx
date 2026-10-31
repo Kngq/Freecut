@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { canHaveTransition, useProjectStore } from '../state/projectStore'
 import { EffectPreview, TransitionPreview } from './EffectPreview'
+import CaptionsPanel from './CaptionsPanel'
 import {
   EFFECT_CATALOG,
   TRANSITION_CATALOG,
@@ -95,7 +96,7 @@ const TABS: { id: TabId; label: string; enabled: boolean; icon: ReactNode }[] = 
   {
     id: 'captions',
     label: 'Captions',
-    enabled: false,
+    enabled: true,
     icon: (
       <TabIcon>
         <rect x="3" y="6" width="18" height="12" rx="2" />
@@ -392,6 +393,7 @@ export default function MediaBin() {
           )}
         </div>
       )}
+      {activeTab === 'captions' && <CaptionsPanel />}
     </div>
   )
 }

@@ -1124,3 +1124,19 @@ canvas.preview-canvas {
   white-space: nowrap;
   max-width: 180px;
 }
+
+/* Auto-captions panel notices (engine/model status). */
+.caption-notice {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.caption-notice strong {
+  display: block;
+  margin-bottom: 2px;
+}

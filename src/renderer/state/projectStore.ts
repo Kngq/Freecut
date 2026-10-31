@@ -52,6 +52,10 @@ interface ProjectState {
   /** On video tracks the clip is appended unless `insertAtStart` is set, in which case it's placed at `start`. */
   addMediaClipToTrack: (trackId: string, asset: MediaAsset, start: number, options?: { insertAtStart?: boolean }) => void
   addTextClipToTrack: (trackId: string, start: number) => void
+  /** Adds a batch of caption text clips (from auto-transcription) to the first text track, each
+   *  positioned at its segment start with the segment's duration. Styled small + bottom-centered
+   *  like burned-in subtitles. */
+  addCaptionClips: (segments: { start: number; end: number; text: string }[]) => void
   addTrack: (type: TrackType) => void
 
   /** Free positioning: only valid for audio/text tracks. */
@@ -361,6 +365,29 @@ export const useProjectStore = create<ProjectState>((set) => ({
       }
       const project = updateTrack(s.project, trackId, (t) => ({ ...t, clips: [...t.clips, clip] }))
       return { project, dirty: true, selectedClipId: clip.id, ...recordPast(s) }
+    }),
+
+  addCaptionClips: (segments) =>
+    set((s) => {
+      const textTrack = s.project.tracks.find((t) => t.type === 'text')
+      if (!textTrack || segments.length === 0) return {}
+      // Subtitle styling: small-ish font anchored near the bottom-center of the canvas.
+      const captionTransform = { ...defaultTransform(), y: 0.86 }
+      const newClips: Clip[] = segments.map((seg) => ({
+        id: uuid(),
+        kind: 'text' as const,
+        trackId: textTrack.id,
+        start: Math.max(0, seg.start),
+        duration: Math.max(0.3, seg.end - seg.start),
+        text: seg.text,
+        fontSize: 42,
+        color: 'white',
+        bold: true,
+        fontFamily: 'sans',
+        transform: captionTransform
+      }))
+      const project = updateTrack(s.project, textTrack.id, (t) => ({ ...t, clips: [...t.clips, ...newClips] }))
+      return { project, dirty: true, ...recordPast(s) }
     }),
 
   addTrack: (type) =>
