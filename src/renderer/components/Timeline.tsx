@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
+import { useLayoutStore, TRACK_HEIGHTS, type TrackHeightMode } from '../state/layoutStore'
 import { formatMMSS, projectDuration, type Clip, type MediaAsset, type ThumbnailCover, type Track } from '@shared/types'
 import { ASSET_DRAG_MIME, assetsFromPaths, droppedFilePaths, isMediaDrag } from '../media'
 
 /** Width of the sticky track label column; lanes and the ruler's 0s mark start after it. */
 const LABEL_WIDTH = 90
 
-/** Clip decoration heights. Tracks are tall enough (see .track-row in styles.css) to fit the
- *  filmstrip thumbnails on top and an audio waveform strip below them without overlap. */
-const TRACK_COVER_HEIGHT = 60 // filmstrip thumbnail row height
+/** Clip decoration heights (default mode baseline; scaled per track-height mode in the component). */
 const TRACK_VIDEO_WAVE_HEIGHT = 24 // waveform strip under a video clip's thumbnails
 const TRACK_AUDIO_WAVE_HEIGHT = 56 // taller waveform for a standalone audio clip
 
@@ -260,6 +259,15 @@ export default function Timeline() {
   const rotateClip = useProjectStore((s) => s.rotateClip)
   const toggleClipFlipH = useProjectStore((s) => s.toggleClipFlipH)
   const undo = useProjectStore((s) => s.undo)
+  const trackHeightMode = useLayoutStore((s) => s.trackHeight)
+  const setTrackHeight = useLayoutStore((s) => s.setTrackHeight)
+  const rowHeight = TRACK_HEIGHTS[trackHeightMode]
+  // Short mode shows only the name bar (no filmstrip/waveform); default/tall scale the
+  // decoration heights to fill the taller row.
+  const showDecorations = trackHeightMode !== 'short'
+  const coverRowHeight = trackHeightMode === 'tall' ? 96 : 60
+  const videoWaveHeight = trackHeightMode === 'tall' ? 30 : TRACK_VIDEO_WAVE_HEIGHT
+  const audioWaveHeight = trackHeightMode === 'tall' ? Math.round(rowHeight * 0.7) : TRACK_AUDIO_WAVE_HEIGHT
   const redo = useProjectStore((s) => s.redo)
   const canUndo = useProjectStore((s) => s.past.length > 0)
   const canRedo = useProjectStore((s) => s.future.length > 0)
@@ -501,9 +509,9 @@ export default function Timeline() {
     // A filmstrip of distinct frames sliced from the asset's sprite sheet, tiled edge-to-edge
     // (no gaps) across the clip. Rendered as discrete tiles so it scales to any zoom without the
     // wide-background painting failure, and shows more frames the further you zoom in.
-    const hasCover = clip.kind === 'media' && track.type !== 'audio' && !!asset?.cover
-    const hasWaveform = clip.kind === 'media' && !!asset?.waveform && asset.waveform.peaks.length > 0
-    const coverHeight = track.type === 'audio' ? 0 : TRACK_COVER_HEIGHT
+    const hasCover = showDecorations && clip.kind === 'media' && track.type !== 'audio' && !!asset?.cover
+    const hasWaveform = showDecorations && clip.kind === 'media' && !!asset?.waveform && asset.waveform.peaks.length > 0
+    const coverHeight = track.type === 'audio' ? 0 : coverRowHeight
 
     // Visible slice of this clip in clip-local px (what overlaps the scrolled viewport). Both the
     // filmstrip and waveform render only this slice, so an enormous clip at high zoom stays cheap
@@ -541,7 +549,7 @@ export default function Timeline() {
           <WaveformCanvas
             peaks={asset!.waveform!.peaks}
             fullWidth={width}
-            height={track.type === 'audio' ? TRACK_AUDIO_WAVE_HEIGHT : TRACK_VIDEO_WAVE_HEIGHT}
+            height={track.type === 'audio' ? audioWaveHeight : videoWaveHeight}
             startFrac={startFrac}
             endFrac={endFrac}
             visibleStart={visibleStart}
@@ -556,13 +564,20 @@ export default function Timeline() {
 
   // Adaptive ruler ticks. Pick the smallest "nice" step (in seconds) that keeps tick labels at
   // least MIN_TICK_PX apart at the current zoom, choosing from a ladder that runs from sub-second
-  // all the way up to whole minutes. Once the step reaches a minute or more, labels switch to a
-  // m:ss / Nm format so a long, zoomed-out timeline reads in minutes instead of huge second counts.
+  // all the way up to whole minutes.
   const MIN_TICK_PX = 64
   const STEP_LADDER = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
   const tickStep = STEP_LADDER.find((step) => step * pxPerSecond >= MIN_TICK_PX) ?? STEP_LADDER[STEP_LADDER.length - 1]
-  const ticks: number[] = []
-  for (let s = 0; s <= duration + tickStep; s += tickStep) ticks.push(s)
+  // Minor subdivisions between labeled (major) ticks — classic ruler look: a few short unlabeled
+  // marks per labeled interval. Kept to a count that divides the step evenly where possible.
+  const MINOR_PER_MAJOR = tickStep % 5 === 0 ? 5 : tickStep % 4 === 0 ? 4 : tickStep % 2 === 0 ? 2 : tickStep % 3 === 0 ? 3 : 1
+  const minorStep = tickStep / MINOR_PER_MAJOR
+  const marks: { t: number; major: boolean }[] = []
+  for (let s = 0; s <= duration + tickStep; s += minorStep) {
+    // A mark is "major" (labeled, taller) when it lands on a multiple of the major step.
+    const major = Math.abs((s / tickStep) - Math.round(s / tickStep)) < 1e-6
+    marks.push({ t: Math.round(s * 1000) / 1000, major })
+  }
 
   /** Ruler tick label — always zero-padded MM:SS, matching the position/duration readout. */
   function tickLabel(seconds: number): string {
@@ -592,19 +607,37 @@ export default function Timeline() {
           value={pxPerSecond}
           onChange={(e) => setZoom(Math.max(minPxPerSecond, Number(e.target.value)))}
         />
+        <span className="tl-sep" />
+        <div className="tl-rowheight" title="Track row height">
+          {(['short', 'default', 'tall'] as TrackHeightMode[]).map((mode) => (
+            <button
+              key={mode}
+              className={`tl-rowheight-btn ${trackHeightMode === mode ? 'active' : ''}`}
+              onClick={() => setTrackHeight(mode)}
+              title={`${mode[0].toUpperCase()}${mode.slice(1)} rows`}
+            >
+              {mode === 'short' ? '▬' : mode === 'default' ? '▭' : '▢'}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="timeline-body" ref={bodyRef} style={{ width: totalWidth }}>
         <div className="ruler" onMouseDown={onRulerPointerDown}>
-          {ticks.map((s) => (
-            <div key={s} className="ruler-tick" style={{ left: LABEL_WIDTH + s * pxPerSecond }}>
-              {tickLabel(s)}
+          {marks.map(({ t, major }) => (
+            <div
+              key={t}
+              className={`ruler-mark ${major ? 'major' : 'minor'}`}
+              style={{ left: LABEL_WIDTH + t * pxPerSecond }}
+            >
+              {major && <span className="ruler-label">{tickLabel(t)}</span>}
             </div>
           ))}
         </div>
         {project.tracks.map((track) => (
           <div
-            className={`track-row ${dropTrackId === track.id ? 'drop-active' : ''}`}
+            className={`track-row th-${trackHeightMode} ${dropTrackId === track.id ? 'drop-active' : ''}`}
             key={track.id}
+            style={{ height: rowHeight }}
             onDragOver={(e) => onLaneDragOver(e, track)}
             onDragLeave={onLaneDragLeave}
             onDrop={(e) => void onLaneDrop(e, track)}

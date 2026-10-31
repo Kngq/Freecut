@@ -469,26 +469,86 @@ canvas.preview-canvas {
 }
 
 .ruler {
-  height: 22px;
+  height: 24px;
   position: relative;
   border-bottom: 1px solid var(--border);
   background: var(--bg-2);
 }
 
-.ruler-tick {
+/* Ruler marks drawn as classic tick LINES rising from the bottom edge: short lines for minor
+   subdivisions, taller lines for labeled (major) ticks. */
+.ruler-mark {
   position: absolute;
-  top: 0;
   bottom: 0;
-  border-left: 1px solid var(--border);
-  padding-left: 3px;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+
+.ruler-mark.minor {
+  height: 6px;
+  background: var(--text-dim);
+  opacity: 0.4;
+}
+
+.ruler-mark.major {
+  height: 11px;
+  background: var(--text-dim);
+  opacity: 0.8;
+}
+
+.ruler-label {
+  position: absolute;
+  bottom: 12px;
+  left: 3px;
   color: var(--text-dim);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .track-row {
   display: flex;
   border-bottom: 1px solid var(--border);
   height: 92px;
+}
+
+/* Track-height row-density modes (CapCut short/default/tall). The row height itself is set
+   inline from TRACK_HEIGHTS; tall mode gets a thicker clip border per the design. */
+.track-row.th-tall .clip {
+  border-width: 3px;
+}
+
+.track-row.th-short .clip {
+  border-width: 1px;
+}
+
+/* Row-height selector in the timeline toolbar. */
+.tl-rowheight {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.tl-rowheight-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tl-rowheight-btn:hover {
+  background: var(--bg-3);
+  color: #fff;
+}
+
+.tl-rowheight-btn.active {
+  background: var(--bg-3);
+  color: var(--accent);
 }
 
 .track-label {
