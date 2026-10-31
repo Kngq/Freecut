@@ -1,4 +1,4 @@
-import { clipSpeedSegments, type Clip, type ClipTransform, type MediaAsset, type MediaClip, type Project, type Track } from './types'
+import { clipSpeedSegments, fontCatalogEntry, type Clip, type ClipTransform, type MediaAsset, type MediaClip, type Project, type Track } from './types'
 import { effectNeedsSubgraph, effectToFfmpegFilters, mirrorSubgraph, transitionToXfade } from './effects'
 
 export interface FfmpegPlan {
@@ -512,6 +512,11 @@ export function buildFfmpegPlan(project: Project): FfmpegPlan {
         : `(h-text_h)*${transform.y}`
 
       const parts = [`drawtext=text='${escapeDrawtext(clip.text)}'`, `fontcolor=${fontColor}`, `fontsize=${fontSizeStr}`, `x=${xStr}`, `y=${yStr}`]
+      const font = fontCatalogEntry(clip.fontFamily)
+      // drawtext needs an actual font FILE. Escape the path's special chars the same way the
+      // text is escaped (colons/backslashes/quotes). If the file is missing on this machine,
+      // ffmpeg falls back to its built-in font rather than failing the whole render.
+      parts.push(`fontfile='${escapeDrawtext(font.fontFile)}'`)
       if (hasKf || transform.opacity !== 1) {
         const alphaStr = hasKf ? `'${piecewiseLinearExpr(kfs!.map((k) => ({ time: k.time, value: k.opacity })), localT)}'` : String(transform.opacity)
         parts.push(`alpha=${alphaStr}`)

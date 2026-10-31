@@ -1,6 +1,7 @@
 import { canMergeWithNext, useProjectStore } from '../state/projectStore'
 import {
   EFFECT_CATALOG,
+  FONT_CATALOG,
   TRANSITION_CATALOG,
   effectCatalogEntry,
   type ClipEffect,
@@ -269,6 +270,20 @@ export default function Inspector() {
               value={clip.fontSize}
               onChange={(e) => updateTextClip(clip.id, { fontSize: Number(e.target.value) })}
             />
+          </div>
+          <div className="field-row">
+            <label>Font</label>
+            <select
+              value={clip.fontFamily ?? 'sans'}
+              style={{ width: '100%' }}
+              onChange={(e) => updateTextClip(clip.id, { fontFamily: e.target.value })}
+            >
+              {FONT_CATALOG.map((f) => (
+                <option key={f.id} value={f.id} style={{ fontFamily: f.family }}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="field-row">
             <label>Color</label>

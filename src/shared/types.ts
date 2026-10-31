@@ -91,6 +91,37 @@ export const TRANSITION_CATALOG: { type: TransitionType; label: string }[] = [
   { type: 'circleClose', label: 'Circle close' }
 ]
 
+/** Selectable text fonts. `family` is the CSS/canvas font-family used in the live preview;
+ *  `fontFile` is an absolute font path ffmpeg's drawtext uses on export (macOS system fonts,
+ *  which are present on every Mac). Keeping both in one catalog means preview and export agree.
+ *  The default (first entry) matches the previous hardcoded sans-serif look. */
+export interface FontCatalogEntry {
+  /** Stable key stored on the clip (TextClip.fontFamily). */
+  id: string
+  label: string
+  /** CSS font-family stack for the preview canvas. */
+  family: string
+  /** Absolute font file for ffmpeg drawtext on export (best-effort; macOS paths). */
+  fontFile: string
+}
+
+export const FONT_CATALOG: FontCatalogEntry[] = [
+  { id: 'sans', label: 'Sans (Helvetica)', family: 'Helvetica, Arial, sans-serif', fontFile: '/System/Library/Fonts/Helvetica.ttc' },
+  { id: 'arial', label: 'Arial', family: 'Arial, Helvetica, sans-serif', fontFile: '/Library/Fonts/Arial.ttf' },
+  { id: 'avenir', label: 'Avenir Next', family: '"Avenir Next", Avenir, sans-serif', fontFile: '/System/Library/Fonts/Avenir Next.ttc' },
+  { id: 'georgia', label: 'Georgia (serif)', family: 'Georgia, "Times New Roman", serif', fontFile: '/System/Library/Fonts/Supplemental/Georgia.ttf' },
+  { id: 'times', label: 'Times New Roman', family: '"Times New Roman", Times, serif', fontFile: '/System/Library/Fonts/Supplemental/Times New Roman.ttf' },
+  { id: 'courier', label: 'Courier (mono)', family: '"Courier New", Courier, monospace', fontFile: '/System/Library/Fonts/Supplemental/Courier New.ttf' },
+  { id: 'menlo', label: 'Menlo (mono)', family: 'Menlo, Monaco, monospace', fontFile: '/System/Library/Fonts/Menlo.ttc' },
+  { id: 'impact', label: 'Impact', family: 'Impact, "Arial Black", sans-serif', fontFile: '/System/Library/Fonts/Supplemental/Impact.ttf' },
+  { id: 'markerfelt', label: 'Marker Felt', family: '"Marker Felt", fantasy', fontFile: '/System/Library/Fonts/Supplemental/MarkerFelt.ttc' },
+  { id: 'chalkboard', label: 'Chalkboard', family: '"Chalkboard SE", "Comic Sans MS", cursive', fontFile: '/System/Library/Fonts/Supplemental/Chalkboard.ttc' }
+]
+
+export function fontCatalogEntry(id: string | undefined): FontCatalogEntry {
+  return FONT_CATALOG.find((f) => f.id === id) ?? FONT_CATALOG[0]
+}
+
 export interface TransformKeyframe {
   time: number // clip-local timeline seconds, 0..effective clip duration
   x: number
@@ -355,6 +386,8 @@ export interface TextClip extends ClipBase {
   fontSize: number // px, relative to a 1080-tall canvas
   color: string
   bold: boolean
+  /** CSS/ffmpeg font family name. Absent ⇒ default sans-serif (keeps old .fcproj files valid). */
+  fontFamily?: string
 }
 
 export type Clip = MediaClip | TextClip

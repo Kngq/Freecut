@@ -354,6 +354,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         fontSize: 64,
         color: 'white',
         bold: true,
+        fontFamily: 'sans',
         transform: defaultTransform()
       }
       const project = updateTrack(s.project, trackId, (t) => ({ ...t, clips: [...t.clips, clip] }))

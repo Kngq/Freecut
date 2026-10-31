@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useProjectStore } from '../state/projectStore'
 import type { Clip, MediaAsset, MediaClip, Project, Track } from '@shared/types'
-import { interpolateTransform, projectDuration, sourceTimeFor, formatMMSS } from '@shared/types'
+import { interpolateTransform, projectDuration, sourceTimeFor, formatMMSS, fontCatalogEntry } from '@shared/types'
 import { applyPostEffects, effectGeometry } from '@shared/effects'
 
 const SEEK_DRIFT_THRESHOLD = 0.12
@@ -456,7 +456,8 @@ export default function Preview() {
         if (t < clip.start || t >= clip.start + clip.duration) continue
         const tf = interpolateTransform(clip.transform, t - clip.start)
         const fontSize = clip.fontSize * tf.scale
-        ctx.font = `${clip.bold ? 'bold ' : ''}${fontSize}px sans-serif`
+        const fontFam = fontCatalogEntry(clip.fontFamily).family
+        ctx.font = `${clip.bold ? 'bold ' : ''}${fontSize}px ${fontFam}`
         ctx.fillStyle = clip.color || 'white'
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
