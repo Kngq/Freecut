@@ -131,6 +131,9 @@ export default function Preview() {
   const playhead = useProjectStore((s) => s.playhead)
   const project = useProjectStore((s) => s.project)
   const previewAssetId = useProjectStore((s) => s.previewAssetId)
+  const isPlaying = useProjectStore((s) => s.isPlaying)
+  const setIsPlaying = useProjectStore((s) => s.setIsPlaying)
+  const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const duration = projectDuration(project)
   const previewAsset = previewAssetId ? project.assets.find((a) => a.id === previewAssetId) ?? null : null
 
@@ -480,8 +483,37 @@ export default function Preview() {
   return (
     <div className="preview-canvas-wrap">
       <canvas ref={canvasRef} className="preview-canvas" />
-      <div className="preview-time">
-        {previewAsset ? `Preview · ${previewAsset.name} · ${formatMMSS(previewAsset.duration)}` : `${formatMMSS(playhead)} / ${formatMMSS(duration)}`}
+      <div className="preview-controls">
+        <button
+          className="preview-skip"
+          title="Jump to start"
+          onClick={() => setPlayhead(0)}
+          aria-label="Jump to start"
+        >
+          ⏮
+        </button>
+        <button
+          className={`preview-playpause ${isPlaying ? 'playing' : 'paused'}`}
+          title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+          aria-label={isPlaying ? 'Pause' : 'Play'}
+          onClick={() => setIsPlaying(!isPlaying)}
+        >
+          {isPlaying ? (
+            // Pause glyph: two bars
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="5" width="4" height="14" rx="1" />
+              <rect x="14" y="5" width="4" height="14" rx="1" />
+            </svg>
+          ) : (
+            // Play glyph: triangle
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+        </button>
+        <div className="preview-time">
+          {previewAsset ? `Preview · ${previewAsset.name} · ${formatMMSS(previewAsset.duration)}` : `${formatMMSS(playhead)} / ${formatMMSS(duration)}`}
+        </div>
       </div>
     </div>
   )

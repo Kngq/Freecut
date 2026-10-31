@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { canInsertFreezeFrame, useProjectStore } from '../state/projectStore'
+import { useProjectStore } from '../state/projectStore'
 import { useRecentsStore } from '../state/recentsStore'
 import type { ExportProgress } from '@shared/ipc'
 
@@ -7,12 +7,6 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
   const project = useProjectStore((s) => s.project)
   const filePath = useProjectStore((s) => s.filePath)
   const dirty = useProjectStore((s) => s.dirty)
-  const isPlaying = useProjectStore((s) => s.isPlaying)
-  const setIsPlaying = useProjectStore((s) => s.setIsPlaying)
-  const setPlayhead = useProjectStore((s) => s.setPlayhead)
-  const splitClipAtPlayhead = useProjectStore((s) => s.splitClipAtPlayhead)
-  const insertFreezeFrame = useProjectStore((s) => s.insertFreezeFrame)
-  const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const addTextClipToTrack = useProjectStore((s) => s.addTextClipToTrack)
   const playhead = useProjectStore((s) => s.playhead)
   const newProject = useProjectStore((s) => s.newProject)
@@ -85,19 +79,6 @@ export default function Toolbar({ onGoHome }: { onGoHome: () => void }) {
       <button onClick={handleOpen}>Open</button>
       <button onClick={handleSave}>Save</button>
       <button onClick={handleSaveAs}>Save As</button>
-      <span style={{ width: 1, background: 'var(--border)', height: 20, margin: '0 4px' }} />
-      <button onClick={() => setIsPlaying(!isPlaying)}>{isPlaying ? 'Pause' : 'Play'}</button>
-      <button onClick={() => setPlayhead(0)}>⏮</button>
-      <button onClick={splitClipAtPlayhead} disabled={!selectedClipId}>
-        Split
-      </button>
-      <button
-        onClick={() => selectedClipId && insertFreezeFrame(selectedClipId)}
-        disabled={!canInsertFreezeFrame(project, playhead, selectedClipId)}
-        title="Insert a 1s frozen hold at the playhead"
-      >
-        Freeze frame
-      </button>
       <button onClick={addText}>+ Text</button>
       <span className="spacer" />
       {exporting && exportState && (

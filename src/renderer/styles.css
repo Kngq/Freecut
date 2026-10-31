@@ -313,18 +313,50 @@ input[type='number'] {
   justify-content: center;
 }
 
-/* Playhead / duration readout, centered under the preview (moved here from the timeline toolbar). */
-.preview-time {
+/* Transport controls centered under the preview (replaces the removed top-bar play/pause). */
+.preview-controls {
   position: absolute;
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(20, 24, 30, 0.6);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.preview-playpause,
+.preview-skip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.preview-playpause:hover,
+.preview-skip:hover {
+  background: var(--bg-3);
+  color: #fff;
+}
+
+.preview-playpause.playing {
+  color: var(--accent);
+}
+
+/* Playhead / duration readout, part of the preview control cluster. */
+.preview-time {
   color: var(--text-dim);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  background: rgba(20, 24, 30, 0.6);
-  border-radius: 4px;
-  padding: 2px 8px;
   pointer-events: none;
 }
 
